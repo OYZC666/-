@@ -405,6 +405,292 @@ function initCountdown() {
   });
 }
 
+/* ---------- 生日倒计时（支持阳历 / 农历） ---------- */
+const BDAY_KEY = 'th.birthdays';
+let birthdays = store.get(BDAY_KEY, []);
+if (!Array.isArray(birthdays)) birthdays = [];
+
+let editingBdayId = null;
+let bdCalendar = 'solar';
+
+/* 计算下一次生日 */
+function birthdayInfo(b, now) {
+  now = now || new Date();
+  const today = startOfDay(now);
+  if (!b || !(b.month >= 1) || !(b.day >= 1)) return null;
+
+  let next = null;
+  let lunarYear = 0;
+  let nextLunar = null;
+  let age = 0;
+
+  if (b.calendar === 'lunar') {
+    if (b.month > 12 || b.day > 30) return null;
+    const nowL = solarToLunar(now.getFullYear(), now.getMonth() + 1, now.getDate());
+    if (!nowL) return null;
+    for (let L = nowL.year; L <= nowL.year + 1 && !next; L++) {
+      let d = null;
+      if (b.isLeap && leapMonthOfYear(L) === b.month) d = lunarToSolar(L, b.month, b.day, true);
+      if (!d) d = lunarToSolar(L, b.month, b.day, false);
+      if (d && startOfDay(d) >= today) {
+        next = d;
+        lunarYear = L;
+        nextLunar = solarToLunar(d.getFullYear(), d.getMonth() + 1, d.getDate());
+      }
+    }
+    if (!next) return null;
+    if (b.year) age = lunarYear - b.year;
+  } else {
+    if (b.month > 12 || b.day > 31) return null;
+    const make = (y) => {
+      const dim = new Date(y, b.month, 0).getDate();
+      return new Date(y, b.month - 1, Math.min(b.day, dim));
+    };
+    let d = make(now.getFullYear());
+    if (d < today) d = make(now.getFullYear() + 1);
+    next = d;
+    nextLunar = solarToLunar(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    if (b.year) age = d.getFullYear() - b.year;
+  }
+
+  const days = Math.round((startOfDay(next) - today) / DAY_MS);
+  return { date: next, lunar: nextLunar, days: days, age: age > 0 ? age : 0 };
+}
+
+function bdayMetaText(b) {
+  if (b.calendar === 'lunar') return '农历 ' + lunarMonthName(b.month, b.isLeap) + lunarDayName(b.day);
+  return '公历 ' + b.month + ' 月 ' + b.day + ' 日';
+}
+
+function bdaySubText(b, info) {
+  const d = info.date;
+  const parts = ['下次 ' + d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日'];
+  if (info.lunar) parts.push('农历' + lunarDateName(info.lunar));
+  if (info.age) parts.push(info.days === 0 ? '今天满 ' + info.age + ' 岁' : '将满 ' + info.age + ' 岁');
+  return parts.join(' · ');
+}
+
+function renderBirthdays() {
+  const grid = $('#bdayGrid');
+  const now = new Date();
+  const rows = birthdays
+    .map((b) => ({ b: b, info: birthdayInfo(b, now) }))
+    .filter((r) => r.info)
+    .sort((a, b) => a.info.days - b.info.days);
+
+  if (!rows.length) {
+    grid.innerHTML = '<div class="empty">还没有生日记录。添加家人、朋友或自己的生日，支持阳历与农历。</div>';
+    return;
+  }
+
+  grid.innerHTML = rows
+    .map(
+      (r) =>
+        '<article class="event-card bday-card' + (r.info.days === 0 ? ' today' : '') +
+        '" data-bday-id="' + r.b.id + '" tabindex="0">' +
+        '<div class="event-emoji">' + (r.info.days === 0 ? '🎉' : '🎂') + '</div>' +
+        '<div class="event-body">' +
+        '<div class="event-name">' + esc(r.b.name) + '</div>' +
+        '<div class="event-date">' + bdayMetaText(r.b) + '</div>' +
+        '<div class="event-sub" data-bday-sub="' + r.b.id + '">' + esc(bdaySubText(r.b, r.info)) + '</div>' +
+        '</div>' +
+        '<div class="event-days"><b data-bday-days="' + r.b.id + '">' +
+        (r.info.days === 0 ? '今天' : r.info.days) + '</b><span>' +
+        (r.info.days === 0 ? '生日快乐' : '天') + '</span></div>' +
+        '<button class="event-del" data-bday-del="' + r.b.id + '" title="删除" aria-label="删除">×</button>' +
+        '</article>'
+    )
+    .join('');
+}
+
+function updateBirthdayCounts() {
+  const now = new Date();
+  $$('[data-bday-days]').forEach((el) => {
+    const b = birthdays.find((x) => x.id === el.dataset.bdayDays);
+    if (!b) return;
+    const info = birthdayInfo(b, now);
+    if (!info) return;
+    el.textContent = info.days === 0 ? '今天' : info.days;
+    const unit = el.parentElement ? el.parentElement.querySelector('span') : null;
+    if (unit) unit.textContent = info.days === 0 ? '生日快乐' : '天';
+    const sub = document.querySelector('[data-bday-sub="' + b.id + '"]');
+    if (sub) sub.textContent = bdaySubText(b, info);
+    const card = el.closest('.bday-card');
+    if (card) card.classList.toggle('today', info.days === 0);
+  });
+}
+
+function fillBdayMonths() {
+  const sel = $('#bdMonth');
+  sel.innerHTML = '';
+  for (let m = 1; m <= 12; m++) {
+    sel.add(new Option(bdCalendar === 'lunar' ? lunarMonthName(m, false) : m + ' 月', String(m)));
+  }
+}
+
+function fillBdayDays(keepDay) {
+  const month = Number($('#bdMonth').value) || 1;
+  const sel = $('#bdDay');
+  sel.innerHTML = '';
+  const max = bdCalendar === 'lunar' ? 30 : new Date(2000, month, 0).getDate();
+  for (let d = 1; d <= max; d++) {
+    sel.add(new Option(bdCalendar === 'lunar' ? lunarDayName(d) : d + ' 日', String(d)));
+  }
+  sel.value = String(Math.min(keepDay || 1, max));
+}
+
+function bdayFromForm() {
+  const yv = $('#bdYear').value.trim();
+  return {
+    id: editingBdayId || uid(),
+    name: $('#bdName').value.trim() || '这位朋友',
+    calendar: bdCalendar,
+    month: Number($('#bdMonth').value) || 1,
+    day: Number($('#bdDay').value) || 1,
+    isLeap: bdCalendar === 'lunar' && $('#bdLeap').checked,
+    year: yv ? Number(yv) : null
+  };
+}
+
+function updateBdayPreview() {
+  const box = $('#bdPreview');
+  const info = birthdayInfo(bdayFromForm(), new Date());
+  if (!info) {
+    box.textContent = '这个日期无法计算，请检查月份和日期。';
+    return;
+  }
+  const d = info.date;
+  const when = info.days === 0 ? '就是今天 🎉' : '还有 ' + info.days + ' 天';
+  box.textContent =
+    '下次生日：' + d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日' +
+    (info.lunar ? '（农历' + lunarDateName(info.lunar) + '）' : '') + ' · ' + when +
+    (info.age ? ' · 将满 ' + info.age + ' 岁' : '');
+}
+
+function syncBdayForm() {
+  $('#bdLeapWrap').hidden = bdCalendar !== 'lunar';
+  $$('#bdCalendar .seg-btn').forEach((btn) => btn.classList.toggle('active', btn.dataset.cal === bdCalendar));
+  updateBdayPreview();
+}
+
+function openBdayModal(id) {
+  editingBdayId = id || null;
+  const b = id ? birthdays.find((x) => x.id === id) : null;
+  const now = new Date();
+  bdCalendar = b ? b.calendar : 'solar';
+
+  $('#bdayModalTitle').textContent = b ? '编辑生日' : '添加生日';
+  $('#bdName').value = b ? b.name : '';
+  $('#bdYear').value = b && b.year ? String(b.year) : '';
+  $('#bdLeap').checked = !!(b && b.isLeap);
+
+  fillBdayMonths();
+  $('#bdMonth').value = String(b ? b.month : now.getMonth() + 1);
+  fillBdayDays(b ? b.day : Math.min(now.getDate(), 28));
+  syncBdayForm();
+  $('#bdayModal').hidden = false;
+  setTimeout(() => $('#bdName').focus(), 50);
+}
+
+function closeBdayModal() {
+  $('#bdayModal').hidden = true;
+  editingBdayId = null;
+}
+
+function saveBday() {
+  const name = $('#bdName').value.trim();
+  if (!name) {
+    toast('请填写称呼');
+    return;
+  }
+  const b = bdayFromForm();
+  b.name = name;
+  if (b.year && (b.year < 1900 || b.year > 2099)) {
+    toast('出生年份需在 1900 - 2099 之间');
+    return;
+  }
+  if (!birthdayInfo(b, new Date())) {
+    toast('这个日期不存在，请检查');
+    return;
+  }
+  if (editingBdayId) {
+    const idx = birthdays.findIndex((x) => x.id === editingBdayId);
+    if (idx >= 0) birthdays[idx] = b;
+    toast('已更新');
+  } else {
+    birthdays.push(b);
+    toast('已添加生日');
+  }
+  store.set(BDAY_KEY, birthdays);
+  renderBirthdays();
+  closeBdayModal();
+}
+
+function initBirthdays() {
+  renderBirthdays();
+
+  $('#addBdayBtn').addEventListener('click', () => openBdayModal(null));
+  $('#bdSave').addEventListener('click', saveBday);
+
+  $('#bdayModal').addEventListener('click', (e) => {
+    if (e.target.closest('[data-bday-close]')) closeBdayModal();
+  });
+
+  $('#bdCalendar').addEventListener('click', (e) => {
+    const btn = e.target.closest('.seg-btn');
+    if (!btn) return;
+    const month = Number($('#bdMonth').value) || 1;
+    const day = Number($('#bdDay').value) || 1;
+    bdCalendar = btn.dataset.cal;
+    fillBdayMonths();
+    $('#bdMonth').value = String(month);
+    fillBdayDays(day);
+    if (bdCalendar !== 'lunar') $('#bdLeap').checked = false;
+    syncBdayForm();
+  });
+
+  $('#bdMonth').addEventListener('change', () => {
+    fillBdayDays(1);
+    updateBdayPreview();
+  });
+  $('#bdDay').addEventListener('change', updateBdayPreview);
+  $('#bdLeap').addEventListener('change', updateBdayPreview);
+  $('#bdName').addEventListener('input', updateBdayPreview);
+  $('#bdYear').addEventListener('input', updateBdayPreview);
+
+  $('#bdayGrid').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-bday-del]');
+    if (del) {
+      const id = del.dataset.bdayDel;
+      const b = birthdays.find((x) => x.id === id);
+      if (b && window.confirm('删除「' + b.name + '」的生日？')) {
+        birthdays = birthdays.filter((x) => x.id !== id);
+        store.set(BDAY_KEY, birthdays);
+        renderBirthdays();
+        toast('已删除');
+      }
+      return;
+    }
+    const card = e.target.closest('[data-bday-id]');
+    if (card) openBdayModal(card.dataset.bdayId);
+  });
+
+  $('#bdayGrid').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const card = e.target.closest('[data-bday-id]');
+      if (card) openBdayModal(card.dataset.bdayId);
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#bdayModal').hidden) closeBdayModal();
+  });
+
+  $('#bdName').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveBday();
+  });
+}
+
 /* =========================================================
    二、计时器
    ========================================================= */
@@ -1126,6 +1412,7 @@ function initInsight() {
 function tick() {
   updateHero();
   updateEventCounts();
+  updateBirthdayCounts();
   updateDayStrip();
   if (live.running) paintLive();
   if ($('#panel-insight').classList.contains('active')) renderProgress();
@@ -1139,6 +1426,7 @@ function init() {
   initTheme();
   initTabs();
   initCountdown();
+  initBirthdays();
   initTimer();
   initLedger();
   initInsight();

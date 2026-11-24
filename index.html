@@ -60,6 +60,12 @@
       <button class="btn primary sm" id="addEventBtn">＋ 添加</button>
     </div>
     <div class="event-grid" id="eventGrid"></div>
+
+    <div class="section-head">
+      <h2>生日倒计时</h2>
+      <button class="btn primary sm" id="addBdayBtn">＋ 添加生日</button>
+    </div>
+    <div class="event-grid" id="bdayGrid"></div>
   </section>
 
   <!-- 计时器 -->
@@ -186,6 +192,36 @@
   <footer class="footer">时间站 · 数据仅保存在本地浏览器 · 今天也要好好过</footer>
 </main>
 
+<!-- 添加 / 编辑生日 -->
+<div class="modal" id="bdayModal" hidden>
+  <div class="modal-mask" data-bday-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="bdayModalTitle">
+    <h3 id="bdayModalTitle">添加生日</h3>
+    <label class="field"><span>称呼 / 姓名</span><input id="bdName" maxlength="16" placeholder="例如：妈妈"></label>
+    <div class="field">
+      <span>历法</span>
+      <div class="seg" id="bdCalendar">
+        <button type="button" class="seg-btn active" data-cal="solar">阳历</button>
+        <button type="button" class="seg-btn" data-cal="lunar">农历</button>
+      </div>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>月份</span><select id="bdMonth"></select></label>
+      <label class="field"><span>日期</span><select id="bdDay"></select></label>
+    </div>
+    <label class="field" id="bdLeapWrap" hidden>
+      <span class="check-row"><input type="checkbox" id="bdLeap"> 闰月</span>
+      <span class="hint">若当年没有这个闰月，将按平月计算</span>
+    </label>
+    <label class="field"><span>出生年份（选填，用于计算年龄）</span><input id="bdYear" type="number" min="1900" max="2099" inputmode="numeric" placeholder="例如 1998"></label>
+    <p class="hint" id="bdPreview"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-bday-close>取消</button>
+      <button class="btn primary" id="bdSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- 添加 / 编辑倒计时 -->
 <div class="modal" id="eventModal" hidden>
   <div class="modal-mask" data-close></div>
@@ -210,6 +246,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="lunar.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
