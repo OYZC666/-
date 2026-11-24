@@ -1,0 +1,1153 @@
+'use strict';
+
+/* =========================================================
+   时间站 · TimeHub
+   纯前端，数据保存在 localStorage
+   ========================================================= */
+
+/* ---------- 工具 ---------- */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+const store = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  },
+  set(key, val) {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch (e) {
+      /* 忽略隐私模式等写入失败 */
+    }
+  }
+};
+
+const uid = () =>
+  window.crypto && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'id' + Math.random().toString(36).slice(2, 10);
+
+const esc = (s) =>
+  String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const pad = (n) => String(n).padStart(2, '0');
+const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+const DAY_MS = 86400000;
+
+function dayKey(d = new Date()) {
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function startOfDay(d = new Date()) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function fmtDate(d) {
+  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 · 周' + WEEK[d.getDay()];
+}
+
+function splitMs(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return {
+    d: Math.floor(total / 86400),
+    h: Math.floor((total % 86400) / 3600),
+    m: Math.floor((total % 3600) / 60),
+    s: total % 60,
+    total: total
+  };
+}
+
+function fmtClock(ms) {
+  const t = splitMs(ms);
+  const h = Math.floor(t.total / 3600);
+  return h > 0 ? h + ':' + pad(Math.floor((t.total % 3600) / 60)) + ':' + pad(t.s) : pad(t.m) + ':' + pad(t.s);
+}
+
+function fmtDur(sec) {
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + ' 分钟';
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return mm ? h + ' 小时 ' + mm + ' 分' : h + ' 小时';
+}
+
+let toastTimer = 0;
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* ---------- 主题 ---------- */
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const btn = $('#themeToggle');
+  btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+  btn.title = theme === 'dark' ? '切换到浅色模式' : '切换到深色模式';
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', theme === 'dark' ? '#000000' : '#f5f5f7');
+}
+
+function initTheme() {
+  const saved = store.get('th.theme', null);
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved || (prefersDark ? 'dark' : 'light'));
+  $('#themeToggle').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    store.set('th.theme', next);
+  });
+}
+
+/* ---------- 标签页 ---------- */
+const TABS = ['countdown', 'timer', 'ledger', 'insight'];
+
+function switchTab(name) {
+  if (!TABS.includes(name)) name = 'countdown';
+  $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  $$('.panel').forEach((p) => p.classList.toggle('active', p.id === 'panel-' + name));
+  try {
+    history.replaceState(null, '', '#' + name);
+  } catch (e) {
+    /* file:// 下可能被拒绝 */
+  }
+  if (name === 'insight') {
+    renderProgress();
+    renderStats();
+  }
+}
+
+function initTabs() {
+  $$('.tab').forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+  const brand = $('.brand');
+  if (brand) {
+    brand.addEventListener('click', (e) => {
+      e.preventDefault();
+      switchTab('countdown');
+    });
+  }
+  const hash = (location.hash || '').replace('#', '');
+  switchTab(TABS.includes(hash) ? hash : 'countdown');
+}
+
+/* =========================================================
+   一、倒计时
+   ========================================================= */
+const EV_KEY = 'th.events';
+
+const PRESET_EVENTS = [
+  { name: '考研初试', at: '2026-12-19T08:30', tag: '考试', note: '2027 届' },
+  { name: '英语四级', at: '2026-12-12T09:00', tag: '考试', note: 'CET-4' },
+  { name: '英语六级', at: '2026-12-12T15:00', tag: '考试', note: 'CET-6' },
+  { name: '圣诞节', at: '2026-12-25T00:00', tag: '节日', note: '' },
+  { name: '元旦', at: '2027-01-01T00:00', tag: '节日', note: '' },
+  { name: '春节', at: '2027-02-06T00:00', tag: '节日', note: '' },
+  { name: '元宵节', at: '2027-02-20T00:00', tag: '节日', note: '' },
+  { name: '清明节', at: '2027-04-05T00:00', tag: '节日', note: '' },
+  { name: '劳动节', at: '2027-05-01T00:00', tag: '节日', note: '' },
+  { name: '高考', at: '2027-06-07T09:00', tag: '考试', note: '' },
+  { name: '端午节', at: '2027-06-09T00:00', tag: '节日', note: '' },
+  { name: '中秋节', at: '2027-09-15T00:00', tag: '节日', note: '' },
+  { name: '国庆节', at: '2027-10-01T00:00', tag: '节日', note: '' }
+];
+
+let events = store.get(EV_KEY, null);
+if (!Array.isArray(events)) {
+  events = PRESET_EVENTS.map((e) => Object.assign({ id: uid() }, e));
+  store.set(EV_KEY, events);
+}
+
+const TAG_EMOJI = { 考试: '📚', 节日: '🎉', 纪念日: '💝', 自定义: '⏳' };
+
+function upcomingEvents() {
+  const now = Date.now();
+  return events
+    .filter((e) => new Date(e.at).getTime() > now - 1000)
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
+}
+
+function renderEvents() {
+  const grid = $('#eventGrid');
+  const list = upcomingEvents();
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty">还没有未来的倒计时，点右上角「＋ 添加」创建一个值得期待的日子。</div>';
+    return;
+  }
+  grid.innerHTML = list
+    .map((e) => {
+      const d = new Date(e.at);
+      return (
+        '<article class="event-card" data-id="' + e.id + '" tabindex="0">' +
+        '<div class="event-emoji">' + (TAG_EMOJI[e.tag] || '⏳') + '</div>' +
+        '<div class="event-body">' +
+        '<div class="event-name">' + esc(e.name) + '</div>' +
+        '<div class="event-date">' + fmtDate(d) + (e.note ? ' · ' + esc(e.note) : '') + '</div>' +
+        '<div class="event-sub" data-sub="' + e.id + '">—</div>' +
+        '</div>' +
+        '<div class="event-days"><b data-days="' + e.id + '">0</b><span>天</span></div>' +
+        '<button class="event-del" data-del="' + e.id + '" title="删除" aria-label="删除">×</button>' +
+        '</article>'
+      );
+    })
+    .join('');
+  updateEventCounts();
+}
+
+function updateEventCounts() {
+  const now = Date.now();
+  $$('[data-days]').forEach((el) => {
+    const e = events.find((x) => x.id === el.dataset.days);
+    if (!e) return;
+    const t = splitMs(new Date(e.at).getTime() - now);
+    let num;
+    let unit;
+    let sub;
+    if (t.total <= 0) {
+      num = 0;
+      unit = '天';
+      sub = '已结束';
+    } else if (t.d > 0) {
+      num = t.d;
+      unit = '天';
+      sub = t.h + ' 时 ' + t.m + ' 分 ' + t.s + ' 秒';
+    } else if (t.h > 0) {
+      num = t.h;
+      unit = '小时';
+      sub = t.m + ' 分 ' + t.s + ' 秒';
+    } else {
+      num = t.m;
+      unit = '分钟';
+      sub = t.s + ' 秒';
+    }
+    el.textContent = num;
+    const unitEl = el.parentElement ? el.parentElement.querySelector('span') : null;
+    if (unitEl) unitEl.textContent = unit;
+    const subEl = document.querySelector('[data-sub="' + e.id + '"]');
+    if (subEl) subEl.textContent = sub;
+  });
+}
+
+let heroEventId = null;
+
+function updateHero() {
+  const list = upcomingEvents();
+  const nameEl = $('#heroName');
+  const daysEl = $('#heroDays');
+  const unitEl = $('#heroUnit');
+  const metaEl = $('#heroMeta');
+  const clockEl = $('#heroClock');
+
+  if (!list.length) {
+    nameEl.textContent = '暂时没有安排';
+    daysEl.textContent = '—';
+    unitEl.textContent = '';
+    metaEl.textContent = '添加一个考试、节日或纪念日吧';
+    clockEl.textContent = '——';
+    if (heroEventId !== null) {
+      heroEventId = null;
+      renderEvents();
+    }
+    return;
+  }
+  const e = list[0];
+  if (e.id !== heroEventId) {
+    heroEventId = e.id;
+    renderEvents();
+  }
+  const d = new Date(e.at);
+  const t = splitMs(d.getTime() - Date.now());
+  nameEl.textContent = (TAG_EMOJI[e.tag] || '⏳') + ' ' + e.name;
+  if (t.total <= 0) {
+    daysEl.textContent = '0';
+    unitEl.textContent = '天';
+  } else if (t.d > 0) {
+    daysEl.textContent = t.d;
+    unitEl.textContent = '天';
+  } else if (t.h > 0) {
+    daysEl.textContent = t.h;
+    unitEl.textContent = '小时';
+  } else {
+    daysEl.textContent = t.m;
+    unitEl.textContent = '分钟';
+  }
+  metaEl.textContent = fmtDate(d);
+  clockEl.textContent = t.d > 0
+    ? t.h + ' 小时 ' + t.m + ' 分 ' + t.s + ' 秒'
+    : t.m + ' 分 ' + t.s + ' 秒';
+}
+
+function updateDayStrip() {
+  const now = new Date();
+  const pct = ((now - startOfDay(now)) / DAY_MS) * 100;
+  const p = Math.min(100, Math.max(0, pct));
+  $('#dayPct').textContent = Math.round(p) + '%';
+  $('#dayBar').style.width = p + '%';
+}
+
+/* 弹窗 */
+let editingId = null;
+
+function openEventModal(id) {
+  editingId = id || null;
+  const modal = $('#eventModal');
+  const nameInput = $('#evName');
+  const timeInput = $('#evTime');
+  const tagInput = $('#evTag');
+
+  if (editingId) {
+    const e = events.find((x) => x.id === editingId);
+    if (!e) return;
+    $('#modalTitle').textContent = '编辑倒计时';
+    nameInput.value = e.name;
+    timeInput.value = (e.at || '').slice(0, 16);
+    tagInput.value = e.tag || '自定义';
+  } else {
+    $('#modalTitle').textContent = '添加倒计时';
+    nameInput.value = '';
+    const tomorrow = new Date(Date.now() + DAY_MS);
+    tomorrow.setHours(9, 0, 0, 0);
+    timeInput.value =
+      tomorrow.getFullYear() + '-' + pad(tomorrow.getMonth() + 1) + '-' + pad(tomorrow.getDate()) + 'T09:00';
+    tagInput.value = '考试';
+  }
+  modal.hidden = false;
+  setTimeout(() => nameInput.focus(), 50);
+}
+
+function closeEventModal() {
+  $('#eventModal').hidden = true;
+  editingId = null;
+}
+
+function saveEvent() {
+  const name = $('#evName').value.trim();
+  const at = $('#evTime').value;
+  const tag = $('#evTag').value;
+  if (!name) {
+    toast('请填写名称');
+    return;
+  }
+  if (!at) {
+    toast('请选择日期和时间');
+    return;
+  }
+  if (editingId) {
+    const e = events.find((x) => x.id === editingId);
+    if (e) {
+      e.name = name;
+      e.at = at;
+      e.tag = tag;
+    }
+    toast('已更新');
+  } else {
+    events.push({ id: uid(), name: name, at: at, tag: tag, note: '' });
+    toast('已添加');
+  }
+  store.set(EV_KEY, events);
+  renderEvents();
+  updateHero();
+  closeEventModal();
+}
+
+
+function initCountdown() {
+  renderEvents();
+  updateHero();
+
+  $('#addEventBtn').addEventListener('click', () => openEventModal(null));
+  $('#evSave').addEventListener('click', saveEvent);
+
+  $('#eventModal').addEventListener('click', (e) => {
+    if (e.target.closest('[data-close]')) closeEventModal();
+  });
+
+  $('#eventGrid').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      const id = del.dataset.del;
+      const ev = events.find((x) => x.id === id);
+      if (!ev) return;
+      if (window.confirm('删除倒计时「' + ev.name + '」？')) {
+        events = events.filter((x) => x.id !== id);
+        store.set(EV_KEY, events);
+        renderEvents();
+        updateHero();
+        toast('已删除');
+      }
+      return;
+    }
+    const card = e.target.closest('.event-card');
+    if (card) openEventModal(card.dataset.id);
+  });
+
+  $('#eventGrid').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const card = e.target.closest('.event-card');
+      if (card) openEventModal(card.dataset.id);
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#eventModal').hidden) closeEventModal();
+  });
+
+  $('#evName').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveEvent();
+  });
+}
+
+/* =========================================================
+   二、计时器
+   ========================================================= */
+const RING_R = 100;
+const RING_C = 2 * Math.PI * RING_R;
+
+const PRESET_GROUPS = {
+  exam: [
+    { name: '考研政治', min: 180 },
+    { name: '考研英语', min: 180 },
+    { name: '考研数学', min: 180 },
+    { name: '考研专业课', min: 180 },
+    { name: '四级 130 分钟', min: 130 },
+    { name: '六级 130 分钟', min: 130 },
+    { name: '高考语文 150 分钟', min: 150 },
+    { name: '高考数学 120 分钟', min: 120 }
+  ],
+  train: [
+    { name: '英语阅读 1 篇', min: 18 },
+    { name: '完形填空', min: 15 },
+    { name: '翻译', min: 20 },
+    { name: '小作文', min: 15 },
+    { name: '大作文', min: 30 },
+    { name: '数学选填', min: 50 },
+    { name: '数学大题 1 道', min: 15 },
+    { name: '政治分析题 1 道', min: 20 },
+    { name: '申论小题', min: 30 }
+  ],
+  pomo: [
+    { name: '专注 25 分钟', min: 25, kind: 'pomo-focus' },
+    { name: '短休息 5 分钟', min: 5, kind: 'pomo-break' },
+    { name: '长休息 15 分钟', min: 15, kind: 'pomo-break' }
+  ]
+};
+
+const tState = {
+  mode: 'countdown',
+  running: false,
+  durationMs: 25 * 60000,
+  remainMs: 25 * 60000,
+  elapsedMs: 0,
+  baseMs: 0,
+  endAt: 0,
+  startAt: 0,
+  presetName: '倒计时',
+  kind: 'custom',
+  timerId: 0
+};
+
+let audioCtx = null;
+let finishTitleTimer = 0;
+
+function ensureAudio() {
+  try {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) audioCtx = new AC();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) {
+    audioCtx = null;
+  }
+}
+
+function beep(times) {
+  ensureAudio();
+  if (!audioCtx) return;
+  try {
+    let t = audioCtx.currentTime;
+    for (let i = 0; i < times; i++) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.28, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.4);
+      t += 0.5;
+    }
+  } catch (e) {
+    /* 忽略音频失败 */
+  }
+}
+
+function currentMs() {
+  return tState.mode === 'countdown' ? tState.remainMs : tState.elapsedMs;
+}
+
+function paintTimer() {
+  const display = $('#timerDisplay');
+  display.textContent = fmtClock(currentMs());
+
+  $('#timerKind').textContent = tState.mode === 'stopwatch' ? '秒表' : tState.presetName;
+  $('#timerNote').textContent = tState.mode === 'stopwatch' ? '正计时' : fmtDur(tState.durationMs / 1000);
+
+  let progress;
+  if (tState.mode === 'countdown') {
+    progress = tState.durationMs > 0 ? tState.remainMs / tState.durationMs : 0;
+  } else {
+    progress = (tState.elapsedMs % 60000) / 60000;
+  }
+  const fg = $('#ringFg');
+  fg.style.strokeDashoffset = String(RING_C * (1 - Math.min(1, Math.max(0, progress))));
+  fg.style.stroke = tState.mode === 'countdown' && tState.remainMs <= 60000 && tState.remainMs > 0 ? 'var(--red)' : '';
+
+  const startBtn = $('#timerStart');
+  startBtn.textContent = tState.running
+    ? '暂停'
+    : tState.mode === 'countdown' && tState.remainMs < tState.durationMs && tState.remainMs > 0
+      ? '继续'
+      : '开始';
+}
+
+function stopTicking() {
+  if (tState.timerId) {
+    clearInterval(tState.timerId);
+    tState.timerId = 0;
+  }
+}
+
+function tickTimer() {
+  if (!tState.running) return;
+  const now = Date.now();
+  if (tState.mode === 'countdown') {
+    tState.remainMs = Math.max(0, tState.endAt - now);
+    if (tState.remainMs <= 0) {
+      tState.remainMs = 0;
+      paintTimer();
+      finishTimer();
+      return;
+    }
+  } else {
+    tState.elapsedMs = tState.baseMs + (now - tState.startAt);
+  }
+  paintTimer();
+}
+
+function startTimer() {
+  if (tState.running) return;
+  ensureAudio();
+  if (tState.mode === 'countdown') {
+    if (tState.remainMs <= 0) tState.remainMs = tState.durationMs;
+    tState.endAt = Date.now() + tState.remainMs;
+  } else {
+    tState.startAt = Date.now();
+  }
+  tState.running = true;
+  stopTicking();
+  tState.timerId = setInterval(tickTimer, 100);
+  paintTimer();
+}
+
+function pauseTimer() {
+  if (tState.mode === 'countdown') {
+    tState.remainMs = Math.max(0, tState.endAt - Date.now());
+  } else if (tState.startAt) {
+    tState.baseMs = tState.baseMs + (Date.now() - tState.startAt);
+    tState.elapsedMs = tState.baseMs;
+  }
+  tState.running = false;
+  stopTicking();
+  paintTimer();
+  document.title = '时间站 · 倒计时与专注工具';
+}
+
+function finishTimer() {
+  tState.running = false;
+  stopTicking();
+  tState.remainMs = 0;
+  paintTimer();
+  beep(3);
+
+  const card = $('#timerCard');
+  card.classList.remove('time-up');
+  void card.offsetWidth;
+  card.classList.add('time-up');
+  setTimeout(() => card.classList.remove('time-up'), 3200);
+
+  if (tState.kind === 'pomo-focus') {
+    bumpPomo();
+    toast('专注完成，休息一下吧 ☕️');
+  } else {
+    toast('时间到！');
+  }
+
+  document.title = '⏰ 时间到 · 时间站';
+  clearTimeout(finishTitleTimer);
+  finishTitleTimer = setTimeout(() => {
+    document.title = '时间站 · 倒计时与专注工具';
+  }, 8000);
+}
+
+function resetTimer() {
+  tState.running = false;
+  stopTicking();
+  if (tState.mode === 'countdown') {
+    tState.remainMs = tState.durationMs;
+  } else {
+    tState.elapsedMs = 0;
+    tState.baseMs = 0;
+    tState.startAt = 0;
+  }
+  paintTimer();
+  document.title = '时间站 · 倒计时与专注工具';
+}
+
+function setPreset(min, name, kind) {
+  tState.mode = 'countdown';
+  tState.running = false;
+  stopTicking();
+  tState.durationMs = min * 60000;
+  tState.remainMs = min * 60000;
+  tState.presetName = name;
+  tState.kind = kind || 'custom';
+  paintTimer();
+  startTimer();
+}
+
+function toggleMode() {
+  tState.running = false;
+  stopTicking();
+  if (tState.mode === 'countdown') {
+    tState.mode = 'stopwatch';
+    tState.elapsedMs = 0;
+    tState.baseMs = 0;
+    tState.startAt = 0;
+    tState.presetName = '秒表';
+    tState.kind = 'stopwatch';
+    $('#timerMode').textContent = '倒计时';
+  } else {
+    tState.mode = 'countdown';
+    tState.durationMs = 25 * 60000;
+    tState.remainMs = 25 * 60000;
+    tState.presetName = '倒计时';
+    tState.kind = 'custom';
+    $('#timerMode').textContent = '秒表';
+  }
+  paintTimer();
+  document.title = '时间站 · 倒计时与专注工具';
+}
+
+function getPomo() {
+  const map = store.get('th.pomo', {});
+  return map[dayKey()] || 0;
+}
+
+function bumpPomo() {
+  const map = store.get('th.pomo', {});
+  map[dayKey()] = (map[dayKey()] || 0) + 1;
+  store.set('th.pomo', map);
+  $('#pomoCount').textContent = String(map[dayKey()]);
+}
+
+function chipsHTML(items, group) {
+  return items
+    .map(
+      (it) =>
+        '<button class="chip" data-group="' + group + '" data-min="' + it.min + '" data-name="' +
+        esc(it.name) + '" data-kind="' + (it.kind || group) + '">' + esc(it.name) + '</button>'
+    )
+    .join('');
+}
+
+function initTimer() {
+  $('#ringFg').style.strokeDasharray = String(RING_C);
+  $('#ringFg').style.strokeDashoffset = '0';
+
+  $('#examChips').innerHTML = chipsHTML(PRESET_GROUPS.exam, 'exam');
+  $('#trainChips').innerHTML = chipsHTML(PRESET_GROUPS.train, 'train');
+  $('#pomoChips').innerHTML = chipsHTML(PRESET_GROUPS.pomo, 'pomo');
+  $('#pomoCount').textContent = String(getPomo());
+
+  $('#timerStart').addEventListener('click', () => {
+    if (tState.running) pauseTimer();
+    else startTimer();
+  });
+  $('#timerReset').addEventListener('click', resetTimer);
+  $('#timerMode').addEventListener('click', toggleMode);
+
+  ['#examChips', '#trainChips', '#pomoChips'].forEach((sel) => {
+    $(sel).addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      const min = Number(chip.dataset.min);
+      const kind = chip.dataset.kind;
+      setPreset(min, chip.dataset.name, kind === 'pomo' ? 'custom' : kind);
+      switchTab('timer');
+      toast(chip.dataset.name + ' · ' + min + ' 分钟开始');
+    });
+  });
+
+  $('#customGo').addEventListener('click', () => {
+    const min = Math.round(Number($('#customMin').value));
+    if (!min || min < 1 || min > 600) {
+      toast('请输入 1 - 600 之间的分钟数');
+      return;
+    }
+    setPreset(min, '自定义 ' + min + ' 分钟', 'custom');
+    toast(min + ' 分钟开始');
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' || e.target.isContentEditable) return;
+    if (!$('#panel-timer').classList.contains('active')) return;
+    e.preventDefault();
+    if (tState.running) pauseTimer();
+    else startTimer();
+  });
+
+  paintTimer();
+}
+
+/* =========================================================
+   三、时间账本
+   ========================================================= */
+const LOG_KEY = 'th.logs';
+const CATS = {
+  study: { name: '学习', color: '#0071e3' },
+  work: { name: '工作', color: '#5856d6' },
+  rest: { name: '休息', color: '#34c759' },
+  play: { name: '娱乐', color: '#ff9f0a' },
+  phone: { name: '刷手机', color: '#ff453a' },
+  commute: { name: '通勤', color: '#8e8e93' },
+  other: { name: '其他', color: '#aeaeb2' }
+};
+const WASTE = ['play', 'phone'];
+
+const TIP = {
+  phone: '试试把手机放到够不到的地方，先专注 25 分钟再奖励自己刷一会儿。',
+  play: '娱乐不是罪，给娱乐设一个明确的结束时间，玩得更尽兴也更不心虚。',
+  rest: '休息是计划的一部分，但可以换成短而规律的休息，避免越休越累。',
+  study: '学习时间很充足，记得穿插休息，效率比时长更重要。',
+  work: '工作占比很高，别忘了给自己留一点空白时间。',
+  commute: '通勤是隐藏的黄金时段，可以变成听书、背单词或听播客的时间。',
+  other: '把「其他」拆得细一点，你会更清楚时间究竟去了哪里。'
+};
+
+let logs = store.get(LOG_KEY, {});
+if (!logs || typeof logs !== 'object' || Array.isArray(logs)) logs = {};
+
+function getRecs(key) {
+  return Array.isArray(logs[key]) ? logs[key] : [];
+}
+
+function saveLogs() {
+  store.set(LOG_KEY, logs);
+}
+
+function addRecord(name, cat, sec) {
+  const k = dayKey();
+  if (!Array.isArray(logs[k])) logs[k] = [];
+  logs[k].push({ id: uid(), name: name || '未命名', cat: cat, sec: Math.max(1, Math.round(sec)), at: Date.now() });
+  saveLogs();
+  renderLedger();
+}
+
+function catOptionsHTML() {
+  return Object.keys(CATS)
+    .map((k) => '<option value="' + k + '">' + CATS[k].name + '</option>')
+    .join('');
+}
+
+function renderSummary() {
+  const recs = getRecs(dayKey());
+  const total = recs.reduce((a, r) => a + r.sec, 0);
+  $('#summaryTotal').textContent = total ? '已记录 ' + fmtDur(total) : '还没有记录';
+
+  const byCat = {};
+  recs.forEach((r) => {
+    byCat[r.cat] = (byCat[r.cat] || 0) + r.sec;
+  });
+
+  const bars = $('#catBars');
+  const cats = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]);
+  if (!cats.length) {
+    bars.innerHTML = '<div class="empty small">今天还没有记录。用上面的「实时记录」或「补记」开始吧。</div>';
+  } else {
+    bars.innerHTML = cats
+      .map((k) => {
+        const c = CATS[k] || CATS.other;
+        const pct = Math.max(2, Math.round((byCat[k] / total) * 100));
+        return (
+          '<div class="cat-row">' +
+          '<span class="cat-dot" style="background:' + c.color + '"></span>' +
+          '<span class="cat-name">' + c.name + '</span>' +
+          '<div class="cat-track"><i style="width:' + pct + '%;background:' + c.color + '"></i></div>' +
+          '<span class="cat-val">' + fmtDur(byCat[k]) + '</span>' +
+          '</div>'
+        );
+      })
+      .join('');
+  }
+
+  renderBlackhole(total, byCat);
+}
+
+function renderBlackhole(total, byCat) {
+  const box = $('#blackhole');
+  const wasteSec = WASTE.reduce((a, k) => a + (byCat[k] || 0), 0);
+
+  if (total <= 0) {
+    box.innerHTML =
+      '<div class="blackhole info"><span class="bh-icon">🕳️</span><div>' +
+      '<b>开始记录，才能看见时间去了哪里。</b><br>先记下今天做过的几件事，我来帮你找出时间黑洞。</div></div>';
+    return;
+  }
+
+  if (wasteSec >= 600 && wasteSec / total >= 0.3) {
+    const topCat = WASTE.map((k) => [k, byCat[k] || 0]).sort((a, b) => b[1] - a[1])[0][0];
+    const pct = Math.round((wasteSec / total) * 100);
+    box.innerHTML =
+      '<div class="blackhole warn"><span class="bh-icon">⚠️</span><div>' +
+      '<b>发现时间黑洞：' + CATS[topCat].name + '消耗了 ' + pct + '% 的可记录时间</b><br>' +
+      '今天有 ' + fmtDur(wasteSec) + ' 被' + CATS[topCat].name + '吃掉了。' + TIP[topCat] +
+      '</div></div>';
+    return;
+  }
+
+  const studySec = (byCat.study || 0) + (byCat.work || 0);
+  if (studySec / total >= 0.6) {
+    box.innerHTML =
+      '<div class="blackhole ok"><span class="bh-icon">🌿</span><div>' +
+      '<b>今天很扎实：学习与工作占了 ' + Math.round((studySec / total) * 100) + '%</b><br>' +
+      '保持这个节奏，记得给自己安排真正的休息。</div></div>';
+    return;
+  }
+
+  box.innerHTML =
+    '<div class="blackhole ok"><span class="bh-icon">✅</span><div>' +
+    '<b>时间分配看起来比较均衡。</b><br>继续记录，数据越多，你越能看清自己的节奏。</div></div>';
+}
+
+function renderWeek() {
+  const arr = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const k = dayKey(d);
+    const sec = getRecs(k).reduce((a, r) => a + r.sec, 0);
+    arr.push({ d: d, k: k, sec: sec });
+  }
+  const maxMin = Math.max(60, arr.reduce((m, a) => Math.max(m, a.sec / 60), 0));
+  const today = dayKey();
+  $('#weekChart').innerHTML = arr
+    .map((a) => {
+      const min = Math.round(a.sec / 60);
+      const h = Math.max(a.sec ? 6 : 3, Math.round((a.sec / 60 / maxMin) * 118));
+      return (
+        '<div class="week-col" title="' + a.k + ' · ' + fmtDur(a.sec) + '">' +
+        '<span class="week-val">' + (min || '') + '</span>' +
+        '<div class="week-bar' + (a.k === today ? ' today' : '') + '" style="height:' + h + 'px"></div>' +
+        '<span class="week-label">' + (a.k === today ? '今天' : '周' + WEEK[a.d.getDay()]) + '</span>' +
+        '</div>'
+      );
+    })
+    .join('');
+}
+
+function renderLogList() {
+  const recs = getRecs(dayKey()).slice().sort((a, b) => b.at - a.at);
+  const box = $('#logList');
+  if (!recs.length) {
+    box.innerHTML = '<div class="empty small">今天还没有明细记录。</div>';
+    return;
+  }
+  box.innerHTML = recs
+    .map((r) => {
+      const c = CATS[r.cat] || CATS.other;
+      const t = new Date(r.at);
+      return (
+        '<div class="log-row">' +
+        '<span class="cat-dot" style="background:' + c.color + '"></span>' +
+        '<span class="log-name">' + esc(r.name) + '</span>' +
+        '<span class="log-tag">' + c.name + '</span>' +
+        '<span class="log-dur">' + fmtDur(r.sec) + '</span>' +
+        '<span class="log-time">' + pad(t.getHours()) + ':' + pad(t.getMinutes()) + '</span>' +
+        '<button class="log-del" data-log-del="' + r.id + '" title="删除" aria-label="删除">×</button>' +
+        '</div>'
+      );
+    })
+    .join('');
+}
+
+function renderLedger() {
+  renderSummary();
+  renderWeek();
+  renderLogList();
+}
+
+let live = { running: false, start: 0, name: '', cat: 'study' };
+
+function paintLive() {
+  $('#liveTime').textContent = fmtClock(Date.now() - live.start);
+}
+
+function toggleLive() {
+  const btn = $('#liveToggle');
+  const nameInput = $('#liveName');
+  const catInput = $('#liveCat');
+
+  if (!live.running) {
+    live.running = true;
+    live.start = Date.now();
+    live.name = nameInput.value.trim();
+    live.cat = catInput.value;
+    btn.textContent = '结束';
+    btn.classList.remove('primary');
+    btn.classList.add('stop');
+    $('#liveHint').textContent = '计时中…';
+    nameInput.disabled = true;
+    catInput.disabled = true;
+    paintLive();
+    return;
+  }
+
+  live.running = false;
+  const sec = Math.round((Date.now() - live.start) / 1000);
+  btn.textContent = '开始';
+  btn.classList.remove('stop');
+  btn.classList.add('primary');
+  $('#liveHint').textContent = '未开始';
+  nameInput.disabled = false;
+  catInput.disabled = false;
+  $('#liveTime').textContent = '00:00:00';
+
+  if (sec >= 10) {
+    addRecord(live.name || CATS[live.cat].name, live.cat, sec);
+    toast('已记录 ' + fmtDur(sec));
+  } else {
+    toast('时长太短，未记录');
+  }
+}
+
+function initLedger() {
+  const opts = catOptionsHTML();
+  $('#liveCat').innerHTML = opts;
+  $('#quickCat').innerHTML = opts;
+  $('#liveCat').value = 'study';
+  $('#quickCat').value = 'study';
+
+  $('#liveToggle').addEventListener('click', toggleLive);
+
+  $('#quickAdd').addEventListener('click', () => {
+    const name = $('#quickName').value.trim();
+    const cat = $('#quickCat').value;
+    const min = Number($('#quickMin').value);
+    if (!min || min <= 0) {
+      toast('请输入有效的分钟数');
+      return;
+    }
+    addRecord(name || CATS[cat].name, cat, min * 60);
+    $('#quickName').value = '';
+    $('#quickMin').value = '';
+    toast('已补记 ' + fmtDur(min * 60));
+  });
+
+  $('#quickMin').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('#quickAdd').click();
+  });
+
+  $('#logList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-log-del]');
+    if (!btn) return;
+    const k = dayKey();
+    logs[k] = getRecs(k).filter((r) => r.id !== btn.dataset.logDel);
+    saveLogs();
+    renderLedger();
+    toast('已删除');
+  });
+
+  renderLedger();
+}
+
+/* =========================================================
+   四、洞察
+   ========================================================= */
+const QUOTES = [
+  '你如何度过一天，就如何度过一生。',
+  '时间不是挤出来的，是选出来的。',
+  '专注一小时，胜过焦虑一整天。',
+  '计划不是为了约束，而是为了少一点犹豫。',
+  '把大目标，拆成今天能完成的一小步。',
+  '休息也是计划的一部分。',
+  '记录时间，是夺回时间的第一步。',
+  '别让刷手机，偷走你原本想做的事。',
+  '今天的一小步，是明天的底气。',
+  '慢一点没关系，别停下就好。',
+  '把注意力放在哪里，人生就在哪里生根。',
+  '先完成，再完美。'
+];
+
+let quoteIdx = new Date().getDate() % QUOTES.length;
+
+function progressRow(label, pct, extra) {
+  const p = Math.min(100, Math.max(0, pct));
+  return (
+    '<div class="prog-row">' +
+    '<div class="prog-top"><span>' + label + '</span><span>' + (extra || Math.floor(p) + '%') + '</span></div>' +
+    '<div class="prog-track"><i style="width:' + p.toFixed(1) + '%"></i></div>' +
+    '</div>'
+  );
+}
+
+function renderProgress() {
+  const now = new Date();
+  const dayP = ((now - startOfDay(now)) / DAY_MS) * 100;
+
+  const weekStart = new Date(now);
+  const dow = (now.getDay() + 6) % 7; // 周一为一周开始
+  weekStart.setDate(now.getDate() - dow);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekP = ((now - weekStart) / (7 * DAY_MS)) * 100;
+
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const monthP = ((now - monthStart) / (monthEnd - monthStart)) * 100;
+
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const yearEnd = new Date(now.getFullYear() + 1, 0, 1);
+  const yearP = ((now - yearStart) / (yearEnd - yearStart)) * 100;
+
+  const box = $('#progressList');
+  if (!box) return;
+  box.innerHTML =
+    progressRow('今天', dayP) +
+    progressRow('本周', weekP) +
+    progressRow('本月', monthP) +
+    progressRow('今年 · ' + now.getFullYear(), yearP);
+}
+
+function renderLife() {
+  const box = $('#lifeContent');
+  if (!box) return;
+  const saved = store.get('th.birthday', '');
+
+  if (!saved) {
+    box.innerHTML =
+      '<p class="muted small">输入生日，看看时间在你生命里走了多远。数据只存在本地。</p>' +
+      '<div class="custom-row"><input type="date" id="bdayInput"><button class="btn sm" id="bdaySave">保存</button></div>';
+    $('#bdaySave').addEventListener('click', () => {
+      const v = $('#bdayInput').value;
+      if (!v) {
+        toast('请选择生日');
+        return;
+      }
+      store.set('th.birthday', v);
+      renderLife();
+      toast('已保存');
+    });
+    return;
+  }
+
+  const birth = new Date(saved + 'T00:00:00');
+  const now = new Date();
+  const lived = Math.floor((now - birth) / DAY_MS);
+  const lifeDays = Math.round(80 * 365.25);
+  const pct = Math.min(100, Math.max(0, (lived / lifeDays) * 100));
+  const remain = Math.max(0, lifeDays - lived);
+
+  let next = new Date(now.getFullYear(), birth.getMonth(), birth.getDate());
+  const today0 = startOfDay(now);
+  if (next < today0) next = new Date(now.getFullYear() + 1, birth.getMonth(), birth.getDate());
+  const toBday = Math.max(0, Math.ceil((next - now) / DAY_MS));
+
+  box.innerHTML =
+    '<div class="life-num"><b>' + lived.toLocaleString('zh-CN') + '</b><span>天</span></div>' +
+    '<p class="muted small">按 80 岁计算，你已走过人生的 ' + pct.toFixed(1) + '%，还剩约 ' +
+    remain.toLocaleString('zh-CN') + ' 天。</p>' +
+    '<div class="prog-track"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
+    '<div class="life-foot"><span>距离下一个生日还有 <b>' + toBday + '</b> 天</span>' +
+    '<button class="btn ghost sm" id="bdayEdit">重新设置</button></div>';
+
+  $('#bdayEdit').addEventListener('click', () => {
+    store.set('th.birthday', '');
+    renderLife();
+  });
+}
+
+function renderStats() {
+  const box = $('#statGrid');
+  if (!box) return;
+  const recs = getRecs(dayKey());
+  const total = recs.reduce((a, r) => a + r.sec, 0);
+  const focus = recs.filter((r) => r.cat === 'study' || r.cat === 'work').reduce((a, r) => a + r.sec, 0);
+  const waste = recs.filter((r) => WASTE.includes(r.cat)).reduce((a, r) => a + r.sec, 0);
+  const eff = total ? Math.round((focus / total) * 100) : 0;
+
+  box.innerHTML =
+    '<div class="stat"><div class="v">' + getPomo() + '</div><div class="k">今日专注（番茄）</div></div>' +
+    '<div class="stat"><div class="v">' + (total ? fmtDur(focus) : '—') + '</div><div class="k">学习 / 工作</div></div>' +
+    '<div class="stat"><div class="v">' + (total ? eff + '%' : '—') + '</div><div class="k">有效时间占比</div></div>' +
+    '<div class="stat"><div class="v">' + (total ? fmtDur(waste) : '—') + '</div><div class="k">疑似时间黑洞</div></div>';
+}
+
+function renderQuote() {
+  $('#quoteText').textContent = QUOTES[quoteIdx];
+}
+
+function initInsight() {
+  renderProgress();
+  renderLife();
+  renderStats();
+  renderQuote();
+  $('#quoteNext').addEventListener('click', () => {
+    quoteIdx = (quoteIdx + 1) % QUOTES.length;
+    renderQuote();
+  });
+}
+
+/* =========================================================
+   启动
+   ========================================================= */
+function tick() {
+  updateHero();
+  updateEventCounts();
+  updateDayStrip();
+  if (live.running) paintLive();
+  if ($('#panel-insight').classList.contains('active')) renderProgress();
+
+  if (tState.running) {
+    document.title = fmtClock(currentMs()) + ' · 时间站';
+  }
+}
+
+function init() {
+  initTheme();
+  initTabs();
+  initCountdown();
+  initTimer();
+  initLedger();
+  initInsight();
+  tick();
+  setInterval(tick, 1000);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
