@@ -25,9 +25,16 @@
       <button class="tab active" data-tab="countdown">倒计时</button>
       <button class="tab" data-tab="timer">计时器</button>
       <button class="tab" data-tab="ledger">时间账本</button>
+      <button class="tab" data-tab="growth">成长</button>
+      <button class="tab" data-tab="fun">趣味</button>
       <button class="tab" data-tab="insight">洞察</button>
     </nav>
     <button class="icon-btn" id="themeToggle" title="切换深色模式" aria-label="切换主题">🌙</button>
+  </div>
+  <div class="collab-bar">
+    <span class="sync-dot" id="syncDot"></span>
+    <span id="syncText">正在连接协同空间…</span>
+    <span class="collab-note">所有访问者共享同一份数据，修改会实时同步 · 请勿填写隐私信息</span>
   </div>
 </header>
 
@@ -163,6 +170,55 @@
     </div>
   </section>
 
+  <!-- 成长 -->
+  <section class="panel" id="panel-growth">
+    <div class="section-head">
+      <h2>习惯打卡</h2>
+      <button class="btn primary sm" id="addHabitBtn">＋ 添加习惯</button>
+    </div>
+    <div class="habit-grid" id="habitGrid"></div>
+
+    <div class="section-head">
+      <h2>每日复盘</h2>
+      <span class="hint" id="reviewWeekStat"></span>
+    </div>
+    <div class="card review-card">
+      <div class="review-tools">
+        <input type="date" id="reviewDate">
+        <span class="hint" id="reviewSavedHint"></span>
+      </div>
+      <label class="field"><span>今天做得好的事</span><textarea id="rvGood" rows="2" maxlength="400" placeholder="哪怕很小，也值得记下来"></textarea></label>
+      <label class="field"><span>今天卡住 / 可以改进的</span><textarea id="rvBad" rows="2" maxlength="400" placeholder="写下来，明天会更顺"></textarea></label>
+      <label class="field"><span>明天最重要的一件事</span><textarea id="rvNext" rows="2" maxlength="200" placeholder="只写一件"></textarea></label>
+      <div class="modal-actions"><button class="btn primary" id="reviewSave">保存复盘</button></div>
+      <div class="review-history" id="reviewHistory"></div>
+    </div>
+
+    <div class="section-head">
+      <h2>活动热力图</h2>
+      <span class="hint">近一年每天的活跃度</span>
+    </div>
+    <div class="card heat-card">
+      <div class="heat-scroll"><div class="heatmap" id="heatmap"></div></div>
+      <div class="heat-legend"><span>少</span><i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i><span>多</span></div>
+    </div>
+  </section>
+
+  <!-- 趣味 -->
+  <section class="panel" id="panel-fun">
+    <div class="section-head">
+      <h2>时间胶囊</h2>
+      <button class="btn primary sm" id="addCapsuleBtn">＋ 写一封</button>
+    </div>
+    <div class="capsule-grid" id="capsuleGrid"></div>
+
+    <div class="section-head">
+      <h2>随机决定器</h2>
+      <button class="btn primary sm" id="addPickBtn">＋ 新建</button>
+    </div>
+    <div class="pick-grid" id="pickGrid"></div>
+  </section>
+
   <!-- 洞察 -->
   <section class="panel" id="panel-insight">
     <div class="insight-grid">
@@ -189,8 +245,64 @@
     </div>
   </section>
 
-  <footer class="footer">时间站 · 数据仅保存在本地浏览器 · 今天也要好好过</footer>
+  <footer class="footer">时间站 · 所有访问者共享数据 · 请勿填写隐私信息 · 今天也要好好过</footer>
 </main>
+
+<!-- 添加 / 编辑习惯 -->
+<div class="modal" id="habitModal" hidden>
+  <div class="modal-mask" data-habit-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="habitModalTitle">
+    <h3 id="habitModalTitle">添加习惯</h3>
+    <label class="field"><span>习惯名称</span><input id="hbName" maxlength="16" placeholder="例如：背单词"></label>
+    <div class="field">
+      <span>图标</span>
+      <div class="emoji-row" id="hbEmojiRow">
+        <button type="button" data-emoji="📚">📚</button>
+        <button type="button" data-emoji="🏃">🏃</button>
+        <button type="button" data-emoji="💧">💧</button>
+        <button type="button" data-emoji="🧘">🧘</button>
+        <button type="button" data-emoji="🌙">🌙</button>
+        <button type="button" data-emoji="💪">💪</button>
+        <button type="button" data-emoji="✍️">✍️</button>
+        <button type="button" data-emoji="🎧">🎧</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" data-habit-close>取消</button>
+      <button class="btn primary" id="hbSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 添加 / 编辑时间胶囊 -->
+<div class="modal" id="capsuleModal" hidden>
+  <div class="modal-mask" data-capsule-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="capsuleModalTitle">
+    <h3 id="capsuleModalTitle">写给未来</h3>
+    <label class="field"><span>标题</span><input id="cpTitle" maxlength="30" placeholder="例如：给一年后的自己"></label>
+    <label class="field"><span>内容</span><textarea id="cpContent" rows="5" maxlength="2000" placeholder="想对未来说些什么？"></textarea></label>
+    <label class="field"><span>解锁时间</span><input id="cpOpenAt" type="datetime-local"></label>
+    <p class="hint">到期前内容不会显示，只显示剩余时间。</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-capsule-close>取消</button>
+      <button class="btn primary" id="cpSave">封存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建 / 编辑随机决定器 -->
+<div class="modal" id="pickModal" hidden>
+  <div class="modal-mask" data-pick-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="pickModalTitle">
+    <h3 id="pickModalTitle">新建决定器</h3>
+    <label class="field"><span>标题</span><input id="pkTitle" maxlength="20" placeholder="例如：今天吃什么"></label>
+    <label class="field"><span>候选项（每行一个）</span><textarea id="pkOptions" rows="6" maxlength="600" placeholder="火锅&#10;烧烤&#10;日料"></textarea></label>
+    <div class="modal-actions">
+      <button class="btn ghost" data-pick-close>取消</button>
+      <button class="btn primary" id="pkSave">保存</button>
+    </div>
+  </div>
+</div>
 
 <!-- 添加 / 编辑生日 -->
 <div class="modal" id="bdayModal" hidden>

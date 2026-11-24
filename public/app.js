@@ -109,7 +109,7 @@ function initTheme() {
 }
 
 /* ---------- 标签页 ---------- */
-const TABS = ['countdown', 'timer', 'ledger', 'insight'];
+const TABS = ['countdown', 'timer', 'ledger', 'growth', 'fun', 'insight'];
 
 function switchTab(name) {
   if (!TABS.includes(name)) name = 'countdown';
@@ -123,6 +123,15 @@ function switchTab(name) {
   if (name === 'insight') {
     renderProgress();
     renderStats();
+  }
+  if (name === 'growth') {
+    renderHabits();
+    renderReviews();
+    renderHeatmap();
+  }
+  if (name === 'fun') {
+    renderCapsules();
+    renderPicks();
   }
 }
 
@@ -160,11 +169,7 @@ const PRESET_EVENTS = [
   { name: '国庆节', at: '2027-10-01T00:00', tag: '节日', note: '' }
 ];
 
-let events = store.get(EV_KEY, null);
-if (!Array.isArray(events)) {
-  events = PRESET_EVENTS.map((e) => Object.assign({ id: uid() }, e));
-  store.set(EV_KEY, events);
-}
+let events = [];
 
 const TAG_EMOJI = { 考试: '📚', 节日: '🎉', 纪念日: '💝', 自定义: '⏳' };
 
@@ -340,19 +345,23 @@ function saveEvent() {
     toast('请选择日期和时间');
     return;
   }
+  const ts = Date.now();
   if (editingId) {
     const e = events.find((x) => x.id === editingId);
     if (e) {
       e.name = name;
       e.at = at;
       e.tag = tag;
+      e.updatedAt = ts;
+      commitUpsert('events', e);
     }
     toast('已更新');
   } else {
-    events.push({ id: uid(), name: name, at: at, tag: tag, note: '' });
+    const e = { id: uid(), name: name, at: at, tag: tag, note: '', updatedAt: ts };
+    events.push(e);
+    commitUpsert('events', e);
     toast('已添加');
   }
-  store.set(EV_KEY, events);
   renderEvents();
   updateHero();
   closeEventModal();
@@ -378,7 +387,7 @@ function initCountdown() {
       if (!ev) return;
       if (window.confirm('删除倒计时「' + ev.name + '」？')) {
         events = events.filter((x) => x.id !== id);
-        store.set(EV_KEY, events);
+        commitDelete('events', id);
         renderEvents();
         updateHero();
         toast('已删除');
@@ -407,8 +416,7 @@ function initCountdown() {
 
 /* ---------- 生日倒计时（支持阳历 / 农历） ---------- */
 const BDAY_KEY = 'th.birthdays';
-let birthdays = store.get(BDAY_KEY, []);
-if (!Array.isArray(birthdays)) birthdays = [];
+let birthdays = [];
 
 let editingBdayId = null;
 let bdCalendar = 'solar';
@@ -605,6 +613,7 @@ function saveBday() {
   }
   const b = bdayFromForm();
   b.name = name;
+  b.updatedAt = Date.now();
   if (b.year && (b.year < 1900 || b.year > 2099)) {
     toast('出生年份需在 1900 - 2099 之间');
     return;
@@ -621,7 +630,7 @@ function saveBday() {
     birthdays.push(b);
     toast('已添加生日');
   }
-  store.set(BDAY_KEY, birthdays);
+  commitUpsert('birthdays', b);
   renderBirthdays();
   closeBdayModal();
 }
@@ -665,7 +674,7 @@ function initBirthdays() {
       const b = birthdays.find((x) => x.id === id);
       if (b && window.confirm('删除「' + b.name + '」的生日？')) {
         birthdays = birthdays.filter((x) => x.id !== id);
-        store.set(BDAY_KEY, birthdays);
+        commitDelete('birthdays', id);
         renderBirthdays();
         toast('已删除');
       }
@@ -1034,22 +1043,24 @@ const TIP = {
   other: '把「其他」拆得细一点，你会更清楚时间究竟去了哪里。'
 };
 
-let logs = store.get(LOG_KEY, {});
-if (!logs || typeof logs !== 'object' || Array.isArray(logs)) logs = {};
+let ledger = [];
 
 function getRecs(key) {
-  return Array.isArray(logs[key]) ? logs[key] : [];
-}
-
-function saveLogs() {
-  store.set(LOG_KEY, logs);
+  return ledger.filter((r) => r.date === key);
 }
 
 function addRecord(name, cat, sec) {
-  const k = dayKey();
-  if (!Array.isArray(logs[k])) logs[k] = [];
-  logs[k].push({ id: uid(), name: name || '未命名', cat: cat, sec: Math.max(1, Math.round(sec)), at: Date.now() });
-  saveLogs();
+  const rec = {
+    id: uid(),
+    date: dayKey(),
+    name: name || '未命名',
+    cat: cat,
+    sec: Math.max(1, Math.round(sec)),
+    at: Date.now(),
+    updatedAt: Date.now()
+  };
+  ledger.push(rec);
+  commitUpsert('ledger', rec);
   renderLedger();
 }
 
@@ -1260,10 +1271,11 @@ function initLedger() {
   $('#logList').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-log-del]');
     if (!btn) return;
-    const k = dayKey();
-    logs[k] = getRecs(k).filter((r) => r.id !== btn.dataset.logDel);
-    saveLogs();
+    const id = btn.dataset.logDel;
+    ledger = ledger.filter((r) => r.id !== id);
+    commitDelete('ledger', id);
     renderLedger();
+    renderHeatmap();
     toast('已删除');
   });
 
@@ -1413,6 +1425,7 @@ function tick() {
   updateHero();
   updateEventCounts();
   updateBirthdayCounts();
+  updateCapsuleCounts();
   updateDayStrip();
   if (live.running) paintLive();
   if ($('#panel-insight').classList.contains('active')) renderProgress();
@@ -1420,6 +1433,767 @@ function tick() {
   if (tState.running) {
     document.title = fmtClock(currentMs()) + ' · 时间站';
   }
+}
+
+/* =========================================================
+   协同同步：所有访问者共享同一份数据
+   ========================================================= */
+const CACHE_KEY = 'th.cache.v2';
+const COLLECTIONS = ['events', 'birthdays', 'ledger', 'habits', 'reviews', 'capsules', 'picks'];
+
+let habits = [];
+let reviews = [];
+let capsules = [];
+let picks = [];
+let syncRev = 0;
+let syncInstance = '';
+let syncOnline = false;
+
+function cleanList(list) {
+  return (Array.isArray(list) ? list : []).filter((x) => x && !x.deleted);
+}
+
+function allState() {
+  return { events, birthdays, ledger, habits, reviews, capsules, picks };
+}
+
+function localHasData() {
+  return COLLECTIONS.some((k) => cleanList(allState()[k]).length > 0);
+}
+
+function stateFrom(j) {
+  return Object.assign({ rev: j.rev, instanceId: j.instanceId }, j.data);
+}
+
+function applyState(s) {
+  if (!s) return;
+  events = cleanList(s.events);
+  birthdays = cleanList(s.birthdays);
+  ledger = cleanList(s.ledger);
+  habits = cleanList(s.habits);
+  reviews = cleanList(s.reviews);
+  capsules = cleanList(s.capsules);
+  picks = cleanList(s.picks);
+  if (typeof s.rev === 'number') syncRev = s.rev;
+  if (s.instanceId) syncInstance = s.instanceId;
+  cacheState();
+  renderAll();
+}
+
+function cacheState() {
+  store.set(CACHE_KEY, Object.assign({ rev: syncRev }, allState()));
+}
+
+function updateSyncUI() {
+  const dot = $('#syncDot');
+  const txt = $('#syncText');
+  if (!dot || !txt) return;
+  dot.className = 'sync-dot ' + (syncOnline ? 'on' : 'off');
+  txt.textContent = syncOnline ? '协同中 · 修改会实时共享' : '离线 · 修改暂存本机，联网后自动同步';
+}
+
+async function fetchState() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    if (!r.ok) throw new Error('bad');
+    const j = await r.json();
+    syncOnline = true;
+    if (j.instanceId !== syncInstance && localHasData()) {
+      await postRestore();
+    } else if (j.rev !== syncRev || j.instanceId !== syncInstance) {
+      applyState(stateFrom(j));
+    }
+  } catch (e) {
+    syncOnline = false;
+  }
+  updateSyncUI();
+}
+
+async function postRestore() {
+  const r = await fetch('/api/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: allState() })
+  });
+  if (!r.ok) throw new Error('bad');
+  const j = await r.json();
+  applyState(stateFrom(j));
+}
+
+function isEmptyServer(d) {
+  return !d || COLLECTIONS.every((k) => !Array.isArray(d[k]) || d[k].filter((x) => !x.deleted).length === 0);
+}
+
+function seedLocal() {
+  const now = Date.now();
+  if (!events.length) {
+    const legacy = store.get(EV_KEY, null);
+    if (Array.isArray(legacy) && legacy.length) {
+      events = legacy.map((e) => Object.assign({}, e, { id: e.id || uid(), updatedAt: now }));
+    } else {
+      events = PRESET_EVENTS.map((e, i) =>
+        Object.assign({ id: 'ev-preset-' + i, updatedAt: now }, e)
+      );
+    }
+  }
+  if (!birthdays.length) {
+    const legacy = store.get(BDAY_KEY, null);
+    if (Array.isArray(legacy)) birthdays = legacy.map((b) => Object.assign({}, b, { updatedAt: now }));
+  }
+  if (!ledger.length) {
+    const legacy = store.get(LOG_KEY, null);
+    if (legacy && typeof legacy === 'object') {
+      Object.keys(legacy).forEach((date) => {
+        (Array.isArray(legacy[date]) ? legacy[date] : []).forEach((r) => {
+          ledger.push({
+            id: r.id || uid(),
+            date: date,
+            name: r.name || '未命名',
+            cat: r.cat || 'other',
+            sec: r.sec || 0,
+            at: r.at || now,
+            updatedAt: now
+          });
+        });
+      });
+    }
+  }
+  if (!picks.length) {
+    picks = PRESET_PICKS.map((p, i) => ({
+      id: 'pk-preset-' + i,
+      title: p.title,
+      options: p.options.slice(),
+      lastResult: '',
+      updatedAt: now
+    }));
+  }
+}
+
+async function sendOps(ops) {
+  cacheState();
+  try {
+    const r = await fetch('/api/mutate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ops: ops })
+    });
+    if (!r.ok) throw new Error('bad');
+    const j = await r.json();
+    syncOnline = true;
+    applyState(stateFrom(j));
+  } catch (e) {
+    syncOnline = false;
+  }
+  updateSyncUI();
+}
+
+function commitUpsert(coll, item) {
+  sendOps([{ op: 'upsert', coll: coll, item: item }]);
+}
+
+function commitDelete(coll, id) {
+  sendOps([{ op: 'delete', coll: coll, id: id, ts: Date.now() }]);
+}
+
+function renderAll() {
+  renderEvents();
+  updateHero();
+  renderBirthdays();
+  updateBirthdayCounts();
+  renderLedger();
+  renderHabits();
+  renderReviews();
+  renderHeatmap();
+  renderCapsules();
+  renderPicks();
+  renderProgress();
+  renderStats();
+}
+
+async function initSync() {
+  const cached = store.get(CACHE_KEY, null);
+  if (cached && !isEmptyServer(cached)) applyState(cached);
+
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    if (!r.ok) throw new Error('bad');
+    const j = await r.json();
+    syncOnline = true;
+    syncInstance = j.instanceId || '';
+    if (isEmptyServer(j.data)) {
+      seedLocal();
+      cacheState();
+      renderAll();
+      await postRestore();
+    } else if (localHasData()) {
+      await postRestore();
+    } else {
+      applyState(stateFrom(j));
+    }
+  } catch (e) {
+    syncOnline = false;
+  }
+
+  updateSyncUI();
+  setInterval(() => {
+    if (!document.hidden) fetchState();
+  }, 4000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) fetchState();
+  });
+}
+
+/* =========================================================
+   三、习惯打卡
+   ========================================================= */
+const HABIT_EMOJI = ['📚', '🏃', '💧', '🧘', '🌙', '💪', '✍️', '🎧'];
+let editingHabitId = null;
+let hbEmoji = '📚';
+
+function habitStreak(h) {
+  const checks = h.checks || {};
+  const d = startOfDay(new Date());
+  if (!checks[dayKey(d)]) d.setDate(d.getDate() - 1);
+  let n = 0;
+  while (checks[dayKey(d)] && n < 3660) {
+    n += 1;
+    d.setDate(d.getDate() - 1);
+  }
+  return n;
+}
+
+function renderHabits() {
+  const grid = $('#habitGrid');
+  if (!grid) return;
+  if (!habits.length) {
+    grid.innerHTML = '<div class="empty">还没有习惯。添加「背单词」「早起」「运动」，每天点一下打卡。</div>';
+    return;
+  }
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const dim = new Date(y, m + 1, 0).getDate();
+  const todayK = dayKey(now);
+  const monthPrefix = y + '-' + pad(m + 1) + '-';
+
+  grid.innerHTML = habits
+    .map((h) => {
+      const checks = h.checks || {};
+      const checked = !!checks[todayK];
+      let monthCount = 0;
+      let cells = '';
+      for (let d = 1; d <= dim; d++) {
+        const k = monthPrefix + pad(d);
+        const on = !!checks[k];
+        if (on) monthCount += 1;
+        cells +=
+          '<i class="' + (on ? 'on' : '') + (k === todayK ? ' today' : '') +
+          (k > todayK ? ' future' : '') + '" title="' + k + '"></i>';
+      }
+      return (
+        '<article class="card habit-card" data-habit-id="' + h.id + '">' +
+        '<div class="habit-top"><span class="habit-emoji">' + esc(h.emoji || '✅') + '</span>' +
+        '<div class="habit-info"><b>' + esc(h.name) + '</b>' +
+        '<span class="hint">连续 ' + habitStreak(h) + ' 天 · 本月 ' + monthCount + ' 次</span></div>' +
+        '<button class="habit-del" data-habit-del="' + h.id + '" aria-label="删除">×</button></div>' +
+        '<div class="habit-month">' + cells + '</div>' +
+        '<button class="btn ' + (checked ? 'ghost' : 'primary') + ' sm habit-check" data-habit-check="' + h.id + '">' +
+        (checked ? '今日已打卡' : '今日打卡') + '</button></article>'
+      );
+    })
+    .join('');
+}
+
+function toggleHabit(id) {
+  const h = habits.find((x) => x.id === id);
+  if (!h) return;
+  h.checks = h.checks || {};
+  const k = dayKey();
+  if (h.checks[k]) delete h.checks[k];
+  else h.checks[k] = true;
+  h.updatedAt = Date.now();
+  commitUpsert('habits', h);
+  renderHabits();
+  renderHeatmap();
+  toast(h.checks[k] ? '打卡成功，连续 ' + habitStreak(h) + ' 天' : '已取消打卡');
+}
+
+function openHabitModal(id) {
+  editingHabitId = id || null;
+  const h = id ? habits.find((x) => x.id === id) : null;
+  $('#habitModalTitle').textContent = h ? '编辑习惯' : '添加习惯';
+  $('#hbName').value = h ? h.name : '';
+  hbEmoji = h ? h.emoji || '📚' : HABIT_EMOJI[0];
+  $$('#hbEmojiRow button').forEach((b) => b.classList.toggle('active', b.dataset.emoji === hbEmoji));
+  $('#habitModal').hidden = false;
+  setTimeout(() => $('#hbName').focus(), 50);
+}
+
+function closeHabitModal() {
+  $('#habitModal').hidden = true;
+  editingHabitId = null;
+}
+
+function saveHabit() {
+  const name = $('#hbName').value.trim();
+  if (!name) {
+    toast('请填写习惯名称');
+    return;
+  }
+  const old = editingHabitId ? habits.find((x) => x.id === editingHabitId) : null;
+  const item = {
+    id: old ? old.id : uid(),
+    name: name,
+    emoji: hbEmoji,
+    checks: old ? old.checks || {} : {},
+    createdAt: old ? old.createdAt || Date.now() : Date.now(),
+    updatedAt: Date.now()
+  };
+  const i = habits.findIndex((x) => x.id === item.id);
+  if (i >= 0) habits[i] = item;
+  else habits.push(item);
+  commitUpsert('habits', item);
+  renderHabits();
+  renderHeatmap();
+  closeHabitModal();
+  toast(old ? '已更新' : '已添加习惯');
+}
+
+function initHabits() {
+  renderHabits();
+  $('#addHabitBtn').addEventListener('click', () => openHabitModal(null));
+  $('#hbSave').addEventListener('click', saveHabit);
+  $('#habitModal').addEventListener('click', (e) => {
+    if (e.target.closest('[data-habit-close]')) closeHabitModal();
+  });
+  $('#hbEmojiRow').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    hbEmoji = b.dataset.emoji;
+    $$('#hbEmojiRow button').forEach((x) => x.classList.toggle('active', x === b));
+  });
+  $('#hbName').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveHabit();
+  });
+  $('#habitGrid').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-habit-del]');
+    if (del) {
+      const id = del.dataset.habitDel;
+      const h = habits.find((x) => x.id === id);
+      if (h && window.confirm('删除习惯「' + h.name + '」？')) {
+        habits = habits.filter((x) => x.id !== id);
+        commitDelete('habits', id);
+        renderHabits();
+        renderHeatmap();
+        toast('已删除');
+      }
+      return;
+    }
+    const chk = e.target.closest('[data-habit-check]');
+    if (chk) toggleHabit(chk.dataset.habitCheck);
+    const card = e.target.closest('.habit-card');
+    if (card && e.target.closest('.habit-top')) openHabitModal(card.dataset.habitId);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#habitModal').hidden) closeHabitModal();
+  });
+}
+
+/* =========================================================
+   四、每日复盘
+   ========================================================= */
+let reviewDate = dayKey();
+
+function findReview(date) {
+  return reviews.find((r) => r.date === date);
+}
+
+function fmtDateTime(v) {
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return '—';
+  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+    pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function renderReviewHistory() {
+  const box = $('#reviewHistory');
+  if (!box) return;
+  const list = reviews.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7);
+  if (!list.length) {
+    box.innerHTML = '<div class="empty small">还没有复盘记录，从今天开始吧。</div>';
+  } else {
+    box.innerHTML = list
+      .map(
+        (r) =>
+          '<button class="review-item" data-review-date="' + r.date + '"><b>' + r.date + '</b>' +
+          '<span>' + esc((r.next || r.good || '（空）').slice(0, 42)) + '</span></button>'
+      )
+      .join('');
+  }
+  const now = new Date();
+  const dow = (now.getDay() + 6) % 7;
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+  const weekCount = reviews.filter((r) => new Date(r.date + 'T00:00:00') >= start).length;
+  const stat = $('#reviewWeekStat');
+  if (stat) stat.textContent = '本周已复盘 ' + weekCount + ' 天';
+}
+
+function renderReviews() {
+  const input = $('#reviewDate');
+  if (!input) return;
+  if (!input.value) input.value = reviewDate;
+  reviewDate = input.value;
+  const rv = findReview(reviewDate);
+  const active = document.activeElement;
+  const typing = active && active.closest && active.closest('.review-card') && active.tagName !== 'BUTTON';
+  if (!typing) {
+    $('#rvGood').value = rv ? rv.good : '';
+    $('#rvBad').value = rv ? rv.bad : '';
+    $('#rvNext').value = rv ? rv.next : '';
+  }
+  $('#reviewSavedHint').textContent = rv
+    ? '已保存 ' + fmtDateTime(rv.updatedAt)
+    : '还没有这一天的复盘';
+  renderReviewHistory();
+}
+
+function loadReviewForm(date) {
+  reviewDate = date;
+  $('#reviewDate').value = date;
+  const rv = findReview(date);
+  $('#rvGood').value = rv ? rv.good : '';
+  $('#rvBad').value = rv ? rv.bad : '';
+  $('#rvNext').value = rv ? rv.next : '';
+  $('#reviewSavedHint').textContent = rv ? '已保存 ' + fmtDateTime(rv.updatedAt) : '还没有这一天的复盘';
+}
+
+function saveReview() {
+  const date = $('#reviewDate').value || dayKey();
+  const good = $('#rvGood').value.trim();
+  const bad = $('#rvBad').value.trim();
+  const next = $('#rvNext').value.trim();
+  if (!good && !bad && !next) {
+    toast('写点什么再保存吧');
+    return;
+  }
+  const old = findReview(date);
+  const item = {
+    id: old ? old.id : 'rv-' + date,
+    date: date,
+    good: good,
+    bad: bad,
+    next: next,
+    updatedAt: Date.now()
+  };
+  const i = reviews.findIndex((r) => r.date === date);
+  if (i >= 0) reviews[i] = item;
+  else reviews.push(item);
+  commitUpsert('reviews', item);
+  renderReviews();
+  renderHeatmap();
+  toast('复盘已保存');
+}
+
+function initReviews() {
+  const input = $('#reviewDate');
+  input.value = dayKey();
+  reviewDate = input.value;
+  $('#reviewSave').addEventListener('click', saveReview);
+  input.addEventListener('change', () => {
+    reviewDate = input.value || dayKey();
+    renderReviews();
+  });
+  $('#reviewHistory').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-review-date]');
+    if (btn) loadReviewForm(btn.dataset.reviewDate);
+  });
+  renderReviews();
+}
+
+/* =========================================================
+   五、活动热力图
+   ========================================================= */
+function renderHeatmap() {
+  const box = $('#heatmap');
+  if (!box) return;
+  const score = {};
+  ledger.forEach((r) => {
+    score[r.date] = (score[r.date] || 0) + (r.sec || 0) / 60;
+  });
+  habits.forEach((h) => {
+    Object.keys(h.checks || {}).forEach((k) => {
+      if (h.checks[k]) score[k] = (score[k] || 0) + 30;
+    });
+  });
+  reviews.forEach((r) => {
+    score[r.date] = (score[r.date] || 0) + 15;
+  });
+
+  const today = startOfDay(new Date());
+  const start = new Date(today);
+  start.setDate(today.getDate() - (52 * 7 + today.getDay()));
+  let cells = '';
+  const d = new Date(start);
+  while (d <= today) {
+    const k = dayKey(d);
+    const v = score[k] || 0;
+    const lv = v <= 0 ? 0 : v < 30 ? 1 : v < 60 ? 2 : v < 120 ? 3 : 4;
+    cells += '<i class="heat-cell lv' + lv + '" title="' + k + ' · 活跃 ' + Math.round(v) + ' 分"></i>';
+    d.setDate(d.getDate() + 1);
+  }
+  box.innerHTML = cells;
+}
+
+/* =========================================================
+   六、时间胶囊
+   ========================================================= */
+let editingCapsuleId = null;
+
+function renderCapsules() {
+  const grid = $('#capsuleGrid');
+  if (!grid) return;
+  if (!capsules.length) {
+    grid.innerHTML = '<div class="empty">还没有时间胶囊。写一封给未来的自己，到期自动解锁。</div>';
+    return;
+  }
+  const now = Date.now();
+  const list = capsules.slice().sort((a, b) => new Date(a.openAt).getTime() - new Date(b.openAt).getTime());
+  grid.innerHTML = list
+    .map((c) => {
+      const open = new Date(c.openAt).getTime();
+      const unlocked = open <= now;
+      const days = Math.max(0, Math.ceil((open - now) / DAY_MS));
+      return (
+        '<article class="card capsule-card' + (unlocked ? ' open' : '') + '">' +
+        '<div class="capsule-head"><span class="capsule-icon">' + (unlocked ? '📬' : '🔒') + '</span>' +
+        '<div class="capsule-title"><b>' + esc(c.title) + '</b>' +
+        '<span class="hint">解锁于 ' + fmtDateTime(c.openAt) + '</span></div>' +
+        '<button class="habit-del" data-capsule-del="' + c.id + '" aria-label="删除">×</button></div>' +
+        (unlocked
+          ? '<p class="capsule-text">' + esc(c.content).replace(/\n/g, '<br>') + '</p>'
+          : '<div class="capsule-lock"><b data-capsule-count="' + c.id + '">还有 ' + days + ' 天</b><span>到时间才能打开</span></div>') +
+        '</article>'
+      );
+    })
+    .join('');
+}
+
+function updateCapsuleCounts() {
+  const now = Date.now();
+  $$('[data-capsule-count]').forEach((el) => {
+    const c = capsules.find((x) => x.id === el.dataset.capsuleCount);
+    if (!c) return;
+    const left = new Date(c.openAt).getTime() - now;
+    if (left <= 0) {
+      renderCapsules();
+      return;
+    }
+    el.textContent = '还有 ' + Math.ceil(left / DAY_MS) + ' 天';
+  });
+}
+
+function openCapsuleModal() {
+  editingCapsuleId = null;
+  $('#cpTitle').value = '';
+  $('#cpContent').value = '';
+  const d = new Date(Date.now() + 365 * DAY_MS);
+  $('#cpOpenAt').value =
+    d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  $('#capsuleModal').hidden = false;
+  setTimeout(() => $('#cpTitle').focus(), 50);
+}
+
+function closeCapsuleModal() {
+  $('#capsuleModal').hidden = true;
+}
+
+function saveCapsule() {
+  const title = $('#cpTitle').value.trim();
+  const content = $('#cpContent').value.trim();
+  const openAt = $('#cpOpenAt').value;
+  if (!title) {
+    toast('请填写标题');
+    return;
+  }
+  if (!content) {
+    toast('写点内容再封存');
+    return;
+  }
+  if (!openAt || new Date(openAt).getTime() <= Date.now()) {
+    toast('解锁时间需要晚于现在');
+    return;
+  }
+  const item = {
+    id: uid(),
+    title: title,
+    content: content,
+    openAt: openAt,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  capsules.push(item);
+  commitUpsert('capsules', item);
+  renderCapsules();
+  closeCapsuleModal();
+  toast('已封存，到期自动解锁');
+}
+
+function initCapsules() {
+  renderCapsules();
+  $('#addCapsuleBtn').addEventListener('click', openCapsuleModal);
+  $('#cpSave').addEventListener('click', saveCapsule);
+  $('#capsuleModal').addEventListener('click', (e) => {
+    if (e.target.closest('[data-capsule-close]')) closeCapsuleModal();
+  });
+  $('#capsuleGrid').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-capsule-del]');
+    if (!del) return;
+    const id = del.dataset.capsuleDel;
+    const c = capsules.find((x) => x.id === id);
+    if (c && window.confirm('删除时间胶囊「' + c.title + '」？')) {
+      capsules = capsules.filter((x) => x.id !== id);
+      commitDelete('capsules', id);
+      renderCapsules();
+      toast('已删除');
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#capsuleModal').hidden) closeCapsuleModal();
+  });
+}
+
+/* =========================================================
+   七、随机决定器
+   ========================================================= */
+const PRESET_PICKS = [
+  { title: '今天吃什么', options: ['火锅', '烧烤', '日料', '米线', '汉堡', '麻辣烫'] },
+  { title: '今天做什么', options: ['散步', '看剧', '读书', '运动', '收拾房间', '早点睡'] },
+  { title: '谁买单', options: ['我', '你', '他', 'AA', '猜拳输的'] }
+];
+
+let editingPickId = null;
+const pickTimers = {};
+
+function renderPicks() {
+  const grid = $('#pickGrid');
+  if (!grid) return;
+  if (!picks.length) {
+    grid.innerHTML = '<div class="empty">还没有决定器。新建一个，让随机帮你做决定。</div>';
+    return;
+  }
+  grid.innerHTML = picks
+    .map(
+      (p) =>
+        '<article class="card pick-card"><div class="pick-head"><b>' + esc(p.title) + '</b>' +
+        '<button class="habit-del" data-pick-del="' + p.id + '" aria-label="删除">×</button></div>' +
+        '<div class="pick-result" data-pick-result="' + p.id + '">' +
+        (p.lastResult ? esc(p.lastResult) : '点击下方按钮抽取') + '</div>' +
+        '<div class="pick-options">' +
+        (p.options || []).map((o) => '<span>' + esc(o) + '</span>').join('') +
+        '</div><div class="pick-actions">' +
+        '<button class="btn primary sm" data-pick-draw="' + p.id + '">抽一个</button>' +
+        '<button class="btn ghost sm" data-pick-edit="' + p.id + '">编辑</button></div></article>'
+    )
+    .join('');
+}
+
+function drawPick(id) {
+  const p = picks.find((x) => x.id === id);
+  if (!p || !p.options || !p.options.length || pickTimers[id]) return;
+  const box = document.querySelector('[data-pick-result="' + id + '"]');
+  let n = 0;
+  pickTimers[id] = setInterval(() => {
+    n += 1;
+    if (box) box.textContent = p.options[Math.floor(Math.random() * p.options.length)];
+    if (n >= 14) {
+      clearInterval(pickTimers[id]);
+      delete pickTimers[id];
+      const result = p.options[Math.floor(Math.random() * p.options.length)];
+      if (box) box.textContent = result;
+      p.lastResult = result;
+      p.updatedAt = Date.now();
+      commitUpsert('picks', p);
+    }
+  }, 55);
+}
+
+function openPickModal(id) {
+  editingPickId = id || null;
+  const p = id ? picks.find((x) => x.id === id) : null;
+  $('#pickModalTitle').textContent = p ? '编辑决定器' : '新建决定器';
+  $('#pkTitle').value = p ? p.title : '';
+  $('#pkOptions').value = p ? (p.options || []).join('\n') : '';
+  $('#pickModal').hidden = false;
+  setTimeout(() => $('#pkTitle').focus(), 50);
+}
+
+function closePickModal() {
+  $('#pickModal').hidden = true;
+  editingPickId = null;
+}
+
+function savePick() {
+  const title = $('#pkTitle').value.trim();
+  const options = $('#pkOptions')
+    .value.split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (!title) {
+    toast('请填写标题');
+    return;
+  }
+  if (options.length < 2) {
+    toast('至少填写 2 个候选项');
+    return;
+  }
+  const item = {
+    id: editingPickId || uid(),
+    title: title,
+    options: options,
+    lastResult: '',
+    updatedAt: Date.now()
+  };
+  const i = picks.findIndex((x) => x.id === item.id);
+  if (i >= 0) {
+    item.lastResult = picks[i].lastResult || '';
+    picks[i] = item;
+  } else {
+    picks.push(item);
+  }
+  commitUpsert('picks', item);
+  renderPicks();
+  closePickModal();
+  toast('已保存');
+}
+
+function initPicks() {
+  renderPicks();
+  $('#addPickBtn').addEventListener('click', () => openPickModal(null));
+  $('#pkSave').addEventListener('click', savePick);
+  $('#pickModal').addEventListener('click', (e) => {
+    if (e.target.closest('[data-pick-close]')) closePickModal();
+  });
+  $('#pickGrid').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-pick-del]');
+    if (del) {
+      const id = del.dataset.pickDel;
+      const p = picks.find((x) => x.id === id);
+      if (p && window.confirm('删除决定器「' + p.title + '」？')) {
+        picks = picks.filter((x) => x.id !== id);
+        commitDelete('picks', id);
+        renderPicks();
+        toast('已删除');
+      }
+      return;
+    }
+    const draw = e.target.closest('[data-pick-draw]');
+    if (draw) drawPick(draw.dataset.pickDraw);
+    const edit = e.target.closest('[data-pick-edit]');
+    if (edit) openPickModal(edit.dataset.pickEdit);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#pickModal').hidden) closePickModal();
+  });
 }
 
 function init() {
@@ -1430,6 +2204,11 @@ function init() {
   initTimer();
   initLedger();
   initInsight();
+  initHabits();
+  initReviews();
+  initCapsules();
+  initPicks();
+  initSync();
   tick();
   setInterval(tick, 1000);
 }
