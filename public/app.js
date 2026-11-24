@@ -1339,50 +1339,270 @@ function renderProgress() {
     progressRow('今年 · ' + now.getFullYear(), yearP);
 }
 
+/* ---------- 生命进度（生日支持阳历 / 农历） ---------- */
+let lifeEditing = false;
+
+function loadLifeBirth() {
+  const raw = store.get('th.birthday', '');
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(raw);
+    return m
+      ? { calendar: 'solar', year: +m[1], month: +m[2], day: +m[3], isLeap: false }
+      : null;
+  }
+  if (raw && typeof raw === 'object' && raw.year && raw.month && raw.day) {
+    return {
+      calendar: raw.calendar === 'lunar' ? 'lunar' : 'solar',
+      year: +raw.year,
+      month: +raw.month,
+      day: +raw.day,
+      isLeap: !!raw.isLeap
+    };
+  }
+  return null;
+}
+
+function lifeToSolar(b) {
+  if (!b) return null;
+  if (b.calendar === 'lunar') {
+    let d = lunarToSolar(b.year, b.month, b.day, !!b.isLeap);
+    if (!d && b.isLeap) d = lunarToSolar(b.year, b.month, b.day, false);
+    return d;
+  }
+  return new Date(b.year, b.month - 1, b.day);
+}
+
+function nextLifeBirthday(b, now) {
+  const today = startOfDay(now);
+  if (b.calendar === 'lunar') {
+    const l = solarToLunar(now.getFullYear(), now.getMonth() + 1, now.getDate());
+    if (!l) return null;
+    for (let y = l.year; y <= l.year + 2; y++) {
+      const attempts = b.isLeap ? [true, false] : [false];
+      for (let i = 0; i < attempts.length; i++) {
+        const d = lunarToSolar(y, b.month, b.day, attempts[i]);
+        if (d && startOfDay(d) >= today) return d;
+      }
+    }
+    return null;
+  }
+  const make = (y) => new Date(y, b.month - 1, Math.min(b.day, new Date(y, b.month, 0).getDate()));
+  let d = make(now.getFullYear());
+  if (startOfDay(d) < today) d = make(now.getFullYear() + 1);
+  if (startOfDay(d) < today) d = make(now.getFullYear() + 2);
+  return d;
+}
+
+function lifeISO(d) {
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function myBirthdayPreset() {
+  const me = birthdays.find((x) => x.name === '我' && x.calendar === 'lunar');
+  if (!me) return null;
+  return { calendar: 'lunar', year: null, month: me.month, day: me.day, isLeap: !!me.isLeap };
+}
+
+function lifeLunarDraft() {
+  return {
+    calendar: 'lunar',
+    year: Number($('#lifeYear').value),
+    month: Number($('#lifeMonth').value),
+    day: Number($('#lifeDay').value),
+    isLeap: $('#lifeLeap').checked
+  };
+}
+
+function updateLifePreview() {
+  const box = $('#lifePreview');
+  if (!box) return;
+  const b = lifeLunarDraft();
+  if (!b.year || b.year < 1900 || b.year > 2099) {
+    box.textContent = '请填写 1900—2099 年之间的出生年份。';
+    return;
+  }
+  const solar = lunarToSolar(b.year, b.month, b.day, b.isLeap);
+  if (!solar) {
+    box.textContent = '这个农历日期在该年不存在，请调整月份、日期或闰月。';
+    return;
+  }
+  box.textContent =
+    '对应公历：' + solar.getFullYear() + ' 年 ' + (solar.getMonth() + 1) + ' 月 ' + solar.getDate() + ' 日';
+}
+
+function renderLifeForm(box, saved) {
+  const preset = saved || myBirthdayPreset();
+  const cal = preset ? preset.calendar : 'solar';
+  const yearVal = preset && preset.year ? String(preset.year) : '';
+  const monthVal = preset ? preset.month : 1;
+  const dayVal = preset ? preset.day : 1;
+  const leapVal = preset ? !!preset.isLeap : false;
+  const solarVal =
+    saved && saved.calendar === 'solar' ? lifeISO(new Date(saved.year, saved.month - 1, saved.day)) : '';
+
+  let monthOpts = '';
+  for (let m = 1; m <= 12; m++) {
+    monthOpts +=
+      '<option value="' + m + '"' + (m === monthVal ? ' selected' : '') + '>' +
+      lunarMonthName(m, false) + '</option>';
+  }
+  let dayOpts = '';
+  for (let d = 1; d <= 30; d++) {
+    dayOpts +=
+      '<option value="' + d + '"' + (d === dayVal ? ' selected' : '') + '>' +
+      lunarDayName(d) + '</option>';
+  }
+
+  const tip = saved
+    ? '修改后立即重新计算，数据只存在本机。'
+    : preset
+      ? '已按生日名单里的「我」预填农历日期，补上出生年份即可。'
+      : '支持阳历和农历生日，数据只存在本机。';
+
+  box.innerHTML =
+    '<p class="muted small life-tip">' + tip + '</p>' +
+    '<div class="life-setup">' +
+    '<div class="seg" id="lifeCal">' +
+    '<button type="button" class="seg-btn' + (cal === 'solar' ? ' active' : '') + '" data-cal="solar">阳历</button>' +
+    '<button type="button" class="seg-btn' + (cal === 'lunar' ? ' active' : '') + '" data-cal="lunar">农历</button>' +
+    '</div>' +
+    '<div id="lifeSolarRow"' + (cal === 'solar' ? '' : ' hidden') + '>' +
+    '<div class="custom-row"><input type="date" id="bdayInput" value="' + solarVal + '"><button class="btn sm" id="bdaySave">保存</button></div>' +
+    '</div>' +
+    '<div id="lifeLunarRow"' + (cal === 'lunar' ? '' : ' hidden') + '>' +
+    '<div class="field-row">' +
+    '<label class="field"><span>出生年份</span><input type="number" id="lifeYear" min="1900" max="2099" placeholder="例如 1998" value="' + yearVal + '"></label>' +
+    '<label class="field"><span>农历月份</span><select id="lifeMonth">' + monthOpts + '</select></label>' +
+    '</div>' +
+    '<label class="field"><span>农历日期</span><select id="lifeDay">' + dayOpts + '</select></label>' +
+    '<div class="life-setup-row"><label class="check-row"><input type="checkbox" id="lifeLeap"' + (leapVal ? ' checked' : '') + '> 闰月</label>' +
+    '<button class="btn sm" id="lifeLunarSave">保存</button></div>' +
+    '<p class="hint" id="lifePreview"></p>' +
+    '</div>' +
+    '</div>' +
+    (saved ? '<div class="life-foot life-foot-end"><button class="btn ghost sm" id="lifeCancel">取消</button></div>' : '');
+
+  const seg = $('#lifeCal');
+  seg.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cal]');
+    if (!btn) return;
+    $$('.seg-btn', seg).forEach((b) => b.classList.toggle('active', b === btn));
+    $('#lifeSolarRow').hidden = btn.dataset.cal !== 'solar';
+    $('#lifeLunarRow').hidden = btn.dataset.cal !== 'lunar';
+    updateLifePreview();
+  });
+
+  ['lifeYear', 'lifeMonth', 'lifeDay', 'lifeLeap'].forEach((id) => {
+    const el = $('#' + id);
+    el.addEventListener('input', updateLifePreview);
+    el.addEventListener('change', updateLifePreview);
+  });
+  updateLifePreview();
+
+  $('#bdaySave').addEventListener('click', () => {
+    const v = $('#bdayInput').value;
+    if (!v) {
+      toast('请选择生日');
+      return;
+    }
+    const parts = v.split('-').map(Number);
+    const birth = new Date(parts[0], parts[1] - 1, parts[2]);
+    if (startOfDay(birth) > startOfDay(new Date())) {
+      toast('生日不能晚于今天');
+      return;
+    }
+    store.set('th.birthday', { calendar: 'solar', year: parts[0], month: parts[1], day: parts[2], isLeap: false });
+    lifeEditing = false;
+    renderLife();
+    toast('已保存（阳历）');
+  });
+
+  $('#lifeLunarSave').addEventListener('click', () => {
+    const b = lifeLunarDraft();
+    if (!b.year || b.year < 1900 || b.year > 2099) {
+      toast('请填写 1900—2099 的出生年份');
+      return;
+    }
+    const solar = lunarToSolar(b.year, b.month, b.day, b.isLeap);
+    if (!solar) {
+      toast('这个农历日期在该年不存在');
+      return;
+    }
+    if (startOfDay(solar) > startOfDay(new Date())) {
+      toast('生日不能晚于今天');
+      return;
+    }
+    store.set('th.birthday', b);
+    lifeEditing = false;
+    renderLife();
+    toast('已保存（农历' + lunarDateName(b) + '）');
+  });
+
+  const cancel = $('#lifeCancel');
+  if (cancel) {
+    cancel.addEventListener('click', () => {
+      lifeEditing = false;
+      renderLife();
+    });
+  }
+}
+
 function renderLife() {
   const box = $('#lifeContent');
   if (!box) return;
-  const saved = store.get('th.birthday', '');
+  const ae = document.activeElement;
+  if (ae && box.contains(ae) && ae.tagName !== 'BUTTON') return;
 
-  if (!saved) {
-    box.innerHTML =
-      '<p class="muted small">输入生日，看看时间在你生命里走了多远。数据只存在本地。</p>' +
-      '<div class="custom-row"><input type="date" id="bdayInput"><button class="btn sm" id="bdaySave">保存</button></div>';
-    $('#bdaySave').addEventListener('click', () => {
-      const v = $('#bdayInput').value;
-      if (!v) {
-        toast('请选择生日');
-        return;
-      }
-      store.set('th.birthday', v);
-      renderLife();
-      toast('已保存');
-    });
+  const saved = loadLifeBirth();
+  if (!saved || lifeEditing) {
+    renderLifeForm(box, saved);
+    return;
+  }
+  const birth = lifeToSolar(saved);
+  if (!birth) {
+    renderLifeForm(box, saved);
     return;
   }
 
-  const birth = new Date(saved + 'T00:00:00');
   const now = new Date();
-  const lived = Math.floor((now - birth) / DAY_MS);
+  const today0 = startOfDay(now);
+  const lived = Math.max(0, Math.floor((today0 - startOfDay(birth)) / DAY_MS));
   const lifeDays = Math.round(80 * 365.25);
   const pct = Math.min(100, Math.max(0, (lived / lifeDays) * 100));
   const remain = Math.max(0, lifeDays - lived);
 
-  let next = new Date(now.getFullYear(), birth.getMonth(), birth.getDate());
-  const today0 = startOfDay(now);
-  if (next < today0) next = new Date(now.getFullYear() + 1, birth.getMonth(), birth.getDate());
-  const toBday = Math.max(0, Math.ceil((next - now) / DAY_MS));
+  const next = nextLifeBirthday(saved, now);
+  const daysTo = next ? Math.round((startOfDay(next) - today0) / DAY_MS) : 0;
+
+  const birthLunar = solarToLunar(birth.getFullYear(), birth.getMonth() + 1, birth.getDate());
+  const desc =
+    saved.calendar === 'lunar'
+      ? '农历' + lunarDateName(birthLunar || saved) + ' · 公历 ' + birth.getFullYear() + ' 年 ' +
+        (birth.getMonth() + 1) + ' 月 ' + birth.getDate() + ' 日'
+      : '公历 ' + birth.getFullYear() + ' 年 ' + (birth.getMonth() + 1) + ' 月 ' + birth.getDate() + ' 日' +
+        (birthLunar ? ' · 农历' + lunarDateName(birthLunar) : '');
+
+  let nextDesc = '';
+  if (next) {
+    const nl = solarToLunar(next.getFullYear(), next.getMonth() + 1, next.getDate());
+    nextDesc =
+      '下次生日 ' + next.getFullYear() + ' 年 ' + (next.getMonth() + 1) + ' 月 ' + next.getDate() + ' 日' +
+      (nl ? '（农历' + lunarDateName(nl) + '）' : '') +
+      '，' + (daysTo === 0 ? '今天就是生日' : '还有 <b>' + daysTo + '</b> 天');
+  }
 
   box.innerHTML =
     '<div class="life-num"><b>' + lived.toLocaleString('zh-CN') + '</b><span>天</span></div>' +
+    '<p class="small muted life-desc">' + desc + '</p>' +
     '<p class="muted small">按 80 岁计算，你已走过人生的 ' + pct.toFixed(1) + '%，还剩约 ' +
     remain.toLocaleString('zh-CN') + ' 天。</p>' +
     '<div class="prog-track"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
-    '<div class="life-foot"><span>距离下一个生日还有 <b>' + toBday + '</b> 天</span>' +
-    '<button class="btn ghost sm" id="bdayEdit">重新设置</button></div>';
+    (nextDesc ? '<p class="muted small life-next">' + nextDesc + '</p>' : '') +
+    '<div class="life-foot life-foot-end"><button class="btn ghost sm" id="bdayEdit">修改生日</button></div>';
 
   $('#bdayEdit').addEventListener('click', () => {
-    store.set('th.birthday', '');
+    lifeEditing = true;
     renderLife();
   });
 }

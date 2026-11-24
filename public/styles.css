@@ -797,6 +797,15 @@ input:disabled, select:disabled { opacity: 0.55; }
   color: var(--muted);
 }
 .life-foot b { color: var(--text); font-variant-numeric: tabular-nums; }
+.life-card p.life-tip { margin: 0 0 12px; line-height: 1.55; }
+.life-card p.life-desc { margin: 2px 0 10px; }
+.life-card p.life-next { margin: 12px 0 0; line-height: 1.55; }
+.life-setup { display: grid; gap: 12px; }
+.life-setup .seg { justify-self: start; }
+.life-setup .field { margin: 0; }
+.life-setup .hint { margin: 0; line-height: 1.5; }
+.life-setup-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.life-foot-end { justify-content: flex-end; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 
