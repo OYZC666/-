@@ -180,7 +180,7 @@ function serveStatic(req, res, pathname) {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
       'Content-Length': stat.size,
-      'Cache-Control': file.endsWith('.html') ? 'no-cache' : 'public, max-age=300'
+      'Cache-Control': /\.(html|js)$/i.test(file) ? 'no-cache' : 'public, max-age=300'
     });
     if (req.method === 'HEAD') {
       res.end();

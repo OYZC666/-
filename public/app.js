@@ -1404,6 +1404,30 @@ function myBirthdayPreset() {
   return { calendar: 'lunar', year: null, month: me.month, day: me.day, isLeap: !!me.isLeap };
 }
 
+/* 旧版本把农历生日按阳历保存时，自动按「我」的农历日期重新换算 */
+function migrateLifeCalendar(saved) {
+  if (!saved || saved.calendar !== 'solar') return saved;
+  if (store.get('th.lifeMigrated', false)) return saved;
+  const me = birthdays.find((x) => x.name === '我' && x.calendar === 'lunar');
+  if (!me || me.month !== saved.month || me.day !== saved.day) return saved;
+  const conv = {
+    calendar: 'lunar',
+    year: saved.year,
+    month: saved.month,
+    day: saved.day,
+    isLeap: !!me.isLeap
+  };
+  let d = lunarToSolar(conv.year, conv.month, conv.day, conv.isLeap);
+  if (!d && conv.isLeap) {
+    conv.isLeap = false;
+    d = lunarToSolar(conv.year, conv.month, conv.day, false);
+  }
+  if (!d) return saved;
+  store.set('th.birthday', conv);
+  store.set('th.lifeMigrated', true);
+  return conv;
+}
+
 function lifeLunarDraft() {
   return {
     calendar: 'lunar',
@@ -1513,6 +1537,7 @@ function renderLifeForm(box, saved) {
       return;
     }
     store.set('th.birthday', { calendar: 'solar', year: parts[0], month: parts[1], day: parts[2], isLeap: false });
+    store.set('th.lifeMigrated', true);
     lifeEditing = false;
     renderLife();
     toast('已保存（阳历）');
@@ -1554,7 +1579,14 @@ function renderLife() {
   const ae = document.activeElement;
   if (ae && box.contains(ae) && ae.tagName !== 'BUTTON') return;
 
-  const saved = loadLifeBirth();
+  let saved = loadLifeBirth();
+  if (saved) {
+    const fixed = migrateLifeCalendar(saved);
+    if (fixed !== saved) {
+      saved = fixed;
+      toast('已按农历' + lunarDateName(saved) + '重新计算生日');
+    }
+  }
   if (!saved || lifeEditing) {
     renderLifeForm(box, saved);
     return;
