@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="时间站：考试与节假日倒计时、考场计时器、题型限时训练、每日时间分配与时间黑洞分析。">
+<meta name="theme-color" content="#f5f5f7">
+<title>时间站 · 倒计时与专注工具</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='88'>⏱️</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#countdown" aria-label="时间站首页">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"></circle><path d="M12 7.5V12l3 1.8"></path>
+        </svg>
+      </span>
+      <span class="brand-name">时间站</span>
+    </a>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="countdown">倒计时</button>
+      <button class="tab" data-tab="timer">计时器</button>
+      <button class="tab" data-tab="ledger">时间账本</button>
+      <button class="tab" data-tab="growth">成长</button>
+      <button class="tab" data-tab="fun">趣味</button>
+      <button class="tab" data-tab="insight">洞察</button>
+    </nav>
+    <button class="icon-btn" id="themeToggle" title="切换深色模式" aria-label="切换主题">🌙</button>
+  </div>
+  <div class="collab-bar">
+    <span class="sync-dot" id="syncDot"></span>
+    <span id="syncText">正在连接协同空间…</span>
+    <span class="collab-note">所有访问者共享同一份数据，修改会实时同步 · 请勿填写隐私信息</span>
+  </div>
+</header>
+
+<main class="page">
+
+  <!-- 倒计时 -->
+  <section class="panel active" id="panel-countdown">
+    <div class="hero card">
+      <div class="hero-head">
+        <span class="pill">下一个重要日子</span>
+        <span class="hero-name" id="heroName">加载中…</span>
+      </div>
+      <div class="hero-num-row">
+        <span class="hero-num" id="heroDays">0</span>
+        <span class="hero-unit" id="heroUnit">天</span>
+      </div>
+      <div class="hero-meta" id="heroMeta">—</div>
+      <div class="hero-clock" id="heroClock">--:--:--</div>
+      <div class="hero-today">
+        <div class="hero-today-top">
+          <span>今天已过去</span>
+          <b id="dayPct">0%</b>
+        </div>
+        <div class="mini-bar"><i id="dayBar" style="width:0%"></i></div>
+      </div>
+    </div>
+
+    <div class="section-head">
+      <h2>全部倒计时</h2>
+      <button class="btn primary sm" id="addEventBtn">＋ 添加</button>
+    </div>
+    <div class="event-grid" id="eventGrid"></div>
+
+    <div class="section-head">
+      <h2>生日倒计时</h2>
+      <button class="btn primary sm" id="addBdayBtn">＋ 添加生日</button>
+    </div>
+    <div class="event-grid" id="bdayGrid"></div>
+  </section>
+
+  <!-- 计时器 -->
+  <section class="panel" id="panel-timer">
+    <div class="timer-layout">
+      <div class="timer-card card" id="timerCard">
+        <div class="timer-top">
+          <span class="timer-kind" id="timerKind">倒计时</span>
+          <span class="timer-note" id="timerNote">25 分钟</span>
+        </div>
+        <div class="timer-face">
+          <svg class="ring" viewBox="0 0 220 220" aria-hidden="true">
+            <circle class="ring-bg" cx="110" cy="110" r="100"></circle>
+            <circle class="ring-fg" id="ringFg" cx="110" cy="110" r="100"></circle>
+          </svg>
+          <div class="timer-time" id="timerDisplay">25:00</div>
+        </div>
+        <div class="timer-btns">
+          <button class="btn primary" id="timerStart">开始</button>
+          <button class="btn" id="timerReset">重置</button>
+          <button class="btn ghost" id="timerMode">秒表</button>
+        </div>
+        <p class="timer-tip">空格键可快速开始 / 暂停 · 结束时会有提示音</p>
+      </div>
+
+      <div class="preset-stack">
+        <div class="card preset-card">
+          <div class="card-head"><h3>考场计时器</h3><span class="hint">模拟真实考试节奏</span></div>
+          <div class="chips" id="examChips"></div>
+        </div>
+        <div class="card preset-card">
+          <div class="card-head"><h3>题型限时训练</h3><span class="hint">点一下立即开始</span></div>
+          <div class="chips" id="trainChips"></div>
+        </div>
+        <div class="card preset-card">
+          <div class="card-head"><h3>番茄钟</h3><span class="hint">今日完成 <b id="pomoCount">0</b> 个专注</span></div>
+          <div class="chips" id="pomoChips"></div>
+        </div>
+        <div class="card preset-card">
+          <div class="card-head"><h3>自定义</h3><span class="hint">输入分钟数</span></div>
+          <div class="custom-row">
+            <input id="customMin" type="number" min="1" max="600" inputmode="numeric" placeholder="例如 45">
+            <button class="btn" id="customGo">开始计时</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 时间账本 -->
+  <section class="panel" id="panel-ledger">
+    <div class="ledger-top">
+      <div class="card live-card">
+        <div class="card-head"><h3>实时记录</h3><span class="hint" id="liveHint">未开始</span></div>
+        <div class="live-row">
+          <input id="liveName" placeholder="正在做什么？例如：背单词" maxlength="24">
+          <select id="liveCat"></select>
+        </div>
+        <div class="live-row">
+          <div class="live-time" id="liveTime">00:00:00</div>
+          <button class="btn primary" id="liveToggle">开始</button>
+        </div>
+      </div>
+
+      <div class="card add-card">
+        <div class="card-head"><h3>补记</h3><span class="hint">手动填写时长</span></div>
+        <div class="live-row">
+          <input id="quickName" placeholder="做了什么？" maxlength="24">
+          <select id="quickCat"></select>
+        </div>
+        <div class="live-row">
+          <input id="quickMin" type="number" min="1" max="1440" inputmode="numeric" placeholder="时长（分钟）">
+          <button class="btn" id="quickAdd">添加</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card summary-card">
+      <div class="summary-head">
+        <h3>今日时间分配</h3>
+        <span class="hint" id="summaryTotal">还没有记录</span>
+      </div>
+      <div class="cat-bars" id="catBars"></div>
+      <div id="blackhole"></div>
+    </div>
+
+    <div class="card week-card">
+      <div class="card-head"><h3>近 7 天记录</h3><span class="hint">单位：分钟</span></div>
+      <div class="week-chart" id="weekChart"></div>
+    </div>
+
+    <div class="card log-card">
+      <div class="card-head"><h3>今日明细</h3><span class="hint">点击 × 删除</span></div>
+      <div class="log-list" id="logList"></div>
+    </div>
+  </section>
+
+  <!-- 成长 -->
+  <section class="panel" id="panel-growth">
+    <div class="section-head">
+      <h2>习惯打卡</h2>
+      <button class="btn primary sm" id="addHabitBtn">＋ 添加习惯</button>
+    </div>
+    <div class="habit-grid" id="habitGrid"></div>
+
+    <div class="section-head">
+      <h2>每日复盘</h2>
+      <span class="hint" id="reviewWeekStat"></span>
+    </div>
+    <div class="card review-card">
+      <div class="review-tools">
+        <input type="date" id="reviewDate">
+        <span class="hint" id="reviewSavedHint"></span>
+      </div>
+      <label class="field"><span>今天做得好的事</span><textarea id="rvGood" rows="2" maxlength="400" placeholder="哪怕很小，也值得记下来"></textarea></label>
+      <label class="field"><span>今天卡住 / 可以改进的</span><textarea id="rvBad" rows="2" maxlength="400" placeholder="写下来，明天会更顺"></textarea></label>
+      <label class="field"><span>明天最重要的一件事</span><textarea id="rvNext" rows="2" maxlength="200" placeholder="只写一件"></textarea></label>
+      <div class="modal-actions"><button class="btn primary" id="reviewSave">保存复盘</button></div>
+      <div class="review-history" id="reviewHistory"></div>
+    </div>
+
+    <div class="section-head">
+      <h2>活动热力图</h2>
+      <span class="hint">近一年每天的活跃度</span>
+    </div>
+    <div class="card heat-card">
+      <div class="heat-scroll"><div class="heatmap" id="heatmap"></div></div>
+      <div class="heat-legend"><span>少</span><i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i><span>多</span></div>
+    </div>
+  </section>
+
+  <!-- 趣味 -->
+  <section class="panel" id="panel-fun">
+    <div class="section-head">
+      <h2>时间胶囊</h2>
+      <button class="btn primary sm" id="addCapsuleBtn">＋ 写一封</button>
+    </div>
+    <div class="capsule-grid" id="capsuleGrid"></div>
+
+    <div class="section-head">
+      <h2>随机决定器</h2>
+      <button class="btn primary sm" id="addPickBtn">＋ 新建</button>
+    </div>
+    <div class="pick-grid" id="pickGrid"></div>
+  </section>
+
+  <!-- 洞察 -->
+  <section class="panel" id="panel-insight">
+    <div class="insight-grid">
+      <div class="card progress-card">
+        <div class="card-head"><h3>时间进度</h3><span class="hint">别让今天悄悄溜走</span></div>
+        <div class="progress-list" id="progressList"></div>
+      </div>
+
+      <div class="card life-card">
+        <div class="card-head"><h3>生命进度</h3><span class="hint">按 80 岁计算</span></div>
+        <div id="lifeContent"></div>
+      </div>
+
+      <div class="card focus-card">
+        <div class="card-head"><h3>专注与效率</h3><span class="hint">今日</span></div>
+        <div class="stat-grid" id="statGrid"></div>
+      </div>
+
+      <div class="card quote-card">
+        <div class="quote-mark">“</div>
+        <p id="quoteText"></p>
+        <button class="btn ghost sm" id="quoteNext">换一句</button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">时间站 · 所有访问者共享数据 · 请勿填写隐私信息 · 今天也要好好过</footer>
+</main>
+
+<!-- 添加 / 编辑习惯 -->
+<div class="modal" id="habitModal" hidden>
+  <div class="modal-mask" data-habit-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="habitModalTitle">
+    <h3 id="habitModalTitle">添加习惯</h3>
+    <label class="field"><span>习惯名称</span><input id="hbName" maxlength="16" placeholder="例如：背单词"></label>
+    <div class="field">
+      <span>图标</span>
+      <div class="emoji-row" id="hbEmojiRow">
+        <button type="button" data-emoji="📚">📚</button>
+        <button type="button" data-emoji="🏃">🏃</button>
+        <button type="button" data-emoji="💧">💧</button>
+        <button type="button" data-emoji="🧘">🧘</button>
+        <button type="button" data-emoji="🌙">🌙</button>
+        <button type="button" data-emoji="💪">💪</button>
+        <button type="button" data-emoji="✍️">✍️</button>
+        <button type="button" data-emoji="🎧">🎧</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" data-habit-close>取消</button>
+      <button class="btn primary" id="hbSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 添加 / 编辑时间胶囊 -->
+<div class="modal" id="capsuleModal" hidden>
+  <div class="modal-mask" data-capsule-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="capsuleModalTitle">
+    <h3 id="capsuleModalTitle">写给未来</h3>
+    <label class="field"><span>标题</span><input id="cpTitle" maxlength="30" placeholder="例如：给一年后的自己"></label>
+    <label class="field"><span>内容</span><textarea id="cpContent" rows="5" maxlength="2000" placeholder="想对未来说些什么？"></textarea></label>
+    <label class="field"><span>解锁时间</span><input id="cpOpenAt" type="datetime-local"></label>
+    <p class="hint">到期前内容不会显示，只显示剩余时间。</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-capsule-close>取消</button>
+      <button class="btn primary" id="cpSave">封存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建 / 编辑随机决定器 -->
+<div class="modal" id="pickModal" hidden>
+  <div class="modal-mask" data-pick-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="pickModalTitle">
+    <h3 id="pickModalTitle">新建决定器</h3>
+    <label class="field"><span>标题</span><input id="pkTitle" maxlength="20" placeholder="例如：今天吃什么"></label>
+    <label class="field"><span>候选项（每行一个）</span><textarea id="pkOptions" rows="6" maxlength="600" placeholder="火锅&#10;烧烤&#10;日料"></textarea></label>
+    <div class="modal-actions">
+      <button class="btn ghost" data-pick-close>取消</button>
+      <button class="btn primary" id="pkSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 添加 / 编辑生日 -->
+<div class="modal" id="bdayModal" hidden>
+  <div class="modal-mask" data-bday-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="bdayModalTitle">
+    <h3 id="bdayModalTitle">添加生日</h3>
+    <label class="field"><span>称呼 / 姓名</span><input id="bdName" maxlength="16" placeholder="例如：妈妈"></label>
+    <div class="field">
+      <span>历法</span>
+      <div class="seg" id="bdCalendar">
+        <button type="button" class="seg-btn active" data-cal="solar">阳历</button>
+        <button type="button" class="seg-btn" data-cal="lunar">农历</button>
+      </div>
+    </div>
+    <div class="field-row">
+      <label class="field"><span>月份</span><select id="bdMonth"></select></label>
+      <label class="field"><span>日期</span><select id="bdDay"></select></label>
+    </div>
+    <label class="field" id="bdLeapWrap" hidden>
+      <span class="check-row"><input type="checkbox" id="bdLeap"> 闰月</span>
+      <span class="hint">若当年没有这个闰月，将按平月计算</span>
+    </label>
+    <label class="field"><span>出生年份（选填，用于计算年龄）</span><input id="bdYear" type="number" min="1900" max="2099" inputmode="numeric" placeholder="例如 1998"></label>
+    <p class="hint" id="bdPreview"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-bday-close>取消</button>
+      <button class="btn primary" id="bdSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 添加 / 编辑倒计时 -->
+<div class="modal" id="eventModal" hidden>
+  <div class="modal-mask" data-close></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 id="modalTitle">添加倒计时</h3>
+    <label class="field"><span>名称</span><input id="evName" maxlength="24" placeholder="例如：期末考试"></label>
+    <label class="field"><span>日期与时间</span><input id="evTime" type="datetime-local"></label>
+    <label class="field"><span>分类</span>
+      <select id="evTag">
+        <option value="考试">考试</option>
+        <option value="节日">节日</option>
+        <option value="纪念日">纪念日</option>
+        <option value="自定义">自定义</option>
+      </select>
+    </label>
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>取消</button>
+      <button class="btn primary" id="evSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="lunar.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

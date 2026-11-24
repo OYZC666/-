@@ -1,0 +1,13 @@
+{
+  "name": "timehub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "时间站：倒计时、计时器、时间账本与协同成长工具",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
